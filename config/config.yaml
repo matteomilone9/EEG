@@ -1,4 +1,4 @@
-# Configurazione esperimento
+#config
 data:
   edf_path: "./data/sub-01_task-motor-imagery_eeg.edf"
   events_path: "./data/task-motor-imagery_events.tsv"

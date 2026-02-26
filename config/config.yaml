@@ -1,0 +1,28 @@
+# Configurazione esperimento
+data:
+  edf_path: "./data/sub-01_task-motor-imagery_eeg.edf"
+  events_path: "./data/task-motor-imagery_events.tsv"
+  fs: 500  # frequenza campionamento
+
+preprocessing:
+  filter_band: [7, 40]  # mu/beta bands
+  filter_order: 4
+
+training:
+  window_size: 2000
+  batch_size: 32
+  lr: 0.0005 #0.00001
+  weight_decay: 0.005
+  epochs: 50
+  patience: 10
+  resume: True
+
+model:
+  name: "EEGAttentionNet"  # o "SimpleEEGNet"
+  n_channels: 31
+  n_classes: 2
+
+split:
+  train: [0, 113000]
+  val: [113000, 137000]
+  test: [137000, 160000]

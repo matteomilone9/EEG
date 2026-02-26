@@ -9,14 +9,11 @@ from sklearn.utils.class_weight import compute_class_weight
 
 
 def save_checkpoint(model, optimizer, scheduler, epoch, loss, filepath, best_loss=None, patience_counter=None):
-    """
-    ✅ CORRETTA - Salva TUTTI gli stati
-    """
     checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),  # ✅ AGGIUNTO
+        'scheduler_state_dict': scheduler.state_dict(),  #
         'loss': loss,
     }
     if best_loss is not None:

@@ -78,74 +78,56 @@ class SimpleEEGNet(nn.Module):
 
 
 class EEGAttentionNet(nn.Module):
-    """Modello completo con attention - VERSIONE FINALE ANTI-OVERFITTING"""
-
     def __init__(self, n_channels=31, n_samples=2000, n_classes=2):
         super().__init__()
-
-        print(f"⚙️ Inizializzazione EEGAttentionNet con: channels={n_channels}, samples={n_samples}")
-
         self.n_channels = n_channels
         self.n_samples = n_samples
 
-        # Dimensioni (ulteriormente ridotte)
-        self.F1 = 3      # <-- RIDOTTO da 4
-        self.D = 1       # invariato
-        self.F2 = 6      # <-- RIDOTTO da 8
+        self.F1 = 8
+        self.D  = 2
+        self.F2 = 16
 
         # Temporal convolution
         self.temporal_conv = nn.Sequential(
             nn.Conv2d(1, self.F1, kernel_size=(1, 64), padding=(0, 32), bias=False),
             nn.BatchNorm2d(self.F1),
             nn.ELU(),
-            nn.Dropout(0.2)  # <-- AGGIUNTO dropout leggero
         )
 
-        # Depthwise convolution con dropout
+        # Depthwise convolution
         self.depthwise_conv = nn.Sequential(
             nn.Conv2d(self.F1, self.F1 * self.D, kernel_size=(n_channels, 1),
                       groups=self.F1, bias=False),
             nn.BatchNorm2d(self.F1 * self.D),
             nn.ELU(),
-            nn.Dropout(0.3),  # <-- AGGIUNTO dropout
-            nn.AvgPool2d((1, 4))
+            nn.AvgPool2d((1, 4)),
+            nn.Dropout(0.25),   # unico dropout qui
         )
 
-        # Separable convolution con dropout aumentato
+        # Separable convolution
         self.separable_conv = nn.Sequential(
             nn.Conv2d(self.F1 * self.D, self.F2, kernel_size=(1, 16),
                       padding=(0, 8), bias=False),
             nn.BatchNorm2d(self.F2),
             nn.ELU(),
-            nn.Dropout(0.5),  # <-- RIDOTTO da 0.7 (per bilanciare)
             nn.AvgPool2d((1, 8)),
-            nn.Dropout(0.6)   # <-- AUMENTATO da 0.7
+            nn.Dropout(0.25),   # unico dropout qui
         )
 
-        # Adaptive pooling
         self.adaptive_pool = nn.AdaptiveAvgPool2d((1, 64))
 
-        # Classificatore con MASSIMA regolarizzazione
         self.classifier = nn.Sequential(
-            nn.BatchNorm1d(self.F2 * 64),  # <-- AGGIUNTO BatchNorm
-            nn.Dropout(0.4),                # <-- AGGIUNTO dropout iniziale
-            nn.Linear(self.F2 * 64, 24),    # <-- RIDOTTO da 32
+            nn.Flatten(),
+            nn.Linear(self.F2 * 64, 64),
             nn.ELU(),
-            nn.BatchNorm1d(24),              # <-- AGGIUNTO BatchNorm
-            nn.Dropout(0.6),                  # <-- AUMENTATO da 0.7
-            nn.Linear(24, 16),                # <-- AGGIUNTO layer intermedio
-            nn.ELU(),
-            nn.BatchNorm1d(16),               # <-- AGGIUNTO BatchNorm
-            nn.Dropout(0.6),                  # <-- AGGIUNTO dropout
-            nn.Linear(16, n_classes)
+            nn.Dropout(0.25),   # unico dropout nel classificatore
+            nn.Linear(64, n_classes),
         )
 
     def forward(self, x):
-        batch_size = x.shape[0]
         x = x.unsqueeze(1)
         x = self.temporal_conv(x)
         x = self.depthwise_conv(x)
         x = self.separable_conv(x)
         x = self.adaptive_pool(x)
-        x = x.view(batch_size, -1)
         return self.classifier(x)

@@ -195,7 +195,7 @@ def train_with_early_stopping(model, train_loader, val_loader, optimizer, criter
     epochs = config.get('epochs', 100)
     patience = config.get('patience', 15)
     use_amp = config.get('use_amp', False)
-    checkpoint_dir = config.get('checkpoint_dir', './checkpoints')
+    checkpoint_dir = config.get('checkpoint_dir', './checkpoints1000')
 
     # Crea directory checkpoint se non esiste
     os.makedirs(checkpoint_dir, exist_ok=True)

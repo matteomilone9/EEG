@@ -9,7 +9,8 @@ preprocessing:
   filter_order: 4
 
 training:
-  window_size: 2000
+  window_size: 500
+  stride: 250
   batch_size: 32
   lr: 0.0005 #0.00001
   weight_decay: 0.005
@@ -18,7 +19,8 @@ training:
   resume: True
 
 model:
-  name: "EEGAttentionNet"  # o "SimpleEEGNet"
+  name: "EEGAttentionNet"  #
+#  name: "SimpleEEGNet"
   n_channels: 31
   n_classes: 2
 

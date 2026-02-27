@@ -15,8 +15,19 @@ training:
   lr: 0.0005 #0.00001
   weight_decay: 0.005
   epochs: 50
-  patience: 10
+  patience: 5
   resume: True
+
+# ── Pipeline spettrogramma
+training_spectrogram:
+  window_size: 1000   # 2 secondi → più risoluzione tempo-frequenza
+  stride: 250
+  batch_size: 32
+  lr: 0.0005
+  weight_decay: 0.005
+  epochs: 50
+  patience: 10
+
 
 model:
   name: "EEGAttentionNet"  #

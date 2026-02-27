@@ -169,7 +169,8 @@ def main():
     # Class weights calcolati SOLO sul training set
     train_labels_subset = labels[train_range[0]:train_range[1]]
     class_weights = compute_class_weights(train_labels_subset).to(device)
-    criterion = torch.nn.CrossEntropyLoss(weight=class_weights)
+    # criterion = torch.nn.CrossEntropyLoss(weight=class_weights)
+    criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
 
     print(f"Learning rate:  {config['training']['lr']}")
     print(f"Weight decay:   {config['training']['weight_decay']}")
@@ -177,15 +178,15 @@ def main():
     print(f"Early stopping patience: {config['training']['patience']}")
 
     # ── 7. Resume da checkpoint ──────────────
-    resume_path    = "checkpoints/last_checkpoint.pth"
-    best_model_path = "checkpoints/best_model.pth"
-    resume = config["training"].get("resume", True)
+    resume_path    = "spect_checkpoints-500/last_checkpoint.pth"
+    best_model_path = "spect_checkpoints-500/best_model.pth"
+    resume = config["training"].get("resume", False)
 
     start_epoch     = 0
     best_val_loss   = float("inf")
     patience_counter = 0
 
-    os.makedirs("checkpoints", exist_ok=True)
+    os.makedirs("spect_checkpoints-500", exist_ok=True)
 
     if resume and os.path.exists(resume_path):
         print(f"\nCaricamento LAST checkpoint: {resume_path}")
@@ -239,7 +240,7 @@ def main():
             print(f" ✅ Miglior modello! (loss: {best_val_loss:.4f})")
         else:
             patience_counter += 1
-            print(f" ⏳ Patience: {patience_counter}/{config['training']['patience']}")
+            print(f"⏳ Patience: {patience_counter}/{config['training']['patience']}")
 
         # Salva sempre il last checkpoint
         save_checkpoint(

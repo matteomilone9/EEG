@@ -12,7 +12,7 @@ from src import (
     filter_eeg,
     create_labels,
     EEGDataset,
-    EEGAttentionNet,
+    EEGNet,
     SimpleEEGNet,
     train_epoch,
     validate,
@@ -135,8 +135,8 @@ def main():
     print(f"4. Creazione modello: {config['model']['name']}...")
     print("="*50)
 
-    if config["model"]["name"] == "EEGAttentionNet":
-        model = EEGAttentionNet(
+    if config["model"]["name"] == "EEGNet":
+        model = EEGNet(
             n_channels=config["model"]["n_channels"],
             n_samples=window_size,
             n_classes=config["model"]["n_classes"],

@@ -77,7 +77,7 @@ class SimpleEEGNet(nn.Module):
         return self.classifier(x)
 
 
-class EEGAttentionNet(nn.Module):
+class EEGNet(nn.Module):
     def __init__(self, n_channels=31, n_samples=2000, n_classes=2):
         super().__init__()
         self.n_channels = n_channels

@@ -62,72 +62,69 @@ def main():
     print("="*50)
 
     df = load_eeg_data(config["data"]["edf_path"])
-    print(f"Filtraggio {config['preprocessing']['filter_band']} Hz...")
     df = filter_eeg(
         df,
         lowcut=config["preprocessing"]["filter_band"][0],
         highcut=config["preprocessing"]["filter_band"][1],
     )
 
-    print(f"Shape df: {df.shape}")
-    print(f"Range: [{df.values.min():.4f}, {df.values.max():.4f}] V")
-    print(f"Media: {df.values.mean():.4f} V | Std: {df.values.std():.4f} V")
+    print(f"Shape df       : {df.shape}")
+    print(f"Range          : [{df.values.min():.4f}, {df.values.max():.4f}] µV")
+    print(f"Media          : {df.values.mean():.4f} µV")
+    print(f"Std            : {df.values.std():.4f} µV")
 
     # ── 3. Etichette ─────────────────────────
     print("\n" + "="*50)
     print("2. Creazione etichette...")
     print("="*50)
 
-    labels = create_labels(config["data"]["events_path"])
-    print(f"Distribuzione etichette: {np.bincount(labels)}")
-    print(f"Totale campioni etichettati: {len(labels)}")
+    # FIX 1: nuova firma — richiede total_samples e fs
+    labels = create_labels(
+        config["data"]["events_path"],
+        total_samples=df.shape[1],
+        fs=config["data"]["fs"],
+    )
+
+    # FIX 2: np.bincount non supporta label -1 → usa np.unique
+    vals, counts = np.unique(labels, return_counts=True)
+    label_names  = {-1: "Non assegnato", 0: "Riposo", 1: "Motor Imagery", 2: "Preparazione"}
+    for v, c in zip(vals, counts):
+        print(f"  {label_names.get(int(v), str(v)):20s}: {c} campioni ({100*c/len(labels):.1f}%)")
+    print(f"Totale campioni: {len(labels)}")
 
     # ── 4. Split ─────────────────────────────
-    # FIX: range (start, end) basati sui confini dei trial,
-    #      non più liste di indici per evitare data leakage
     train_range = tuple(config["split"]["train"])
     val_range   = tuple(config["split"]["val"])
     test_range  = tuple(config["split"]["test"])
-
-    # FIX: stride = window_size → finestre NON sovrapposte (nessun leakage)
-    stride = config["training"].get("stride", window_size)
+    stride      = config["training"].get("stride", window_size)
 
     print("\n" + "="*50)
     print("3. Creazione dataset e DataLoader...")
     print("="*50)
-    print(f"Window size: {window_size} campioni ({window_size / config['data']['fs']:.1f}s)")
-    print(f"Stride:      {stride} campioni ({stride / config['data']['fs']:.1f}s)")
+    print(f"Window size : {window_size} campioni ({window_size / config['data']['fs']:.1f}s)")
+    print(f"Stride      : {stride} campioni ({stride / config['data']['fs']:.1f}s)")
 
     train_dataset = EEGDataset(df, labels, train_range, window_size, stride=stride)
     val_dataset   = EEGDataset(df, labels, val_range,   window_size, stride=stride)
     test_dataset  = EEGDataset(df, labels, test_range,  window_size, stride=stride)
 
-    print(f"Train: {len(train_dataset)} finestre")
-    print(f"Val:   {len(val_dataset)} finestre")
-    print(f"Test:  {len(test_dataset)} finestre")
+    print(f"Train : {len(train_dataset)} finestre")
+    print(f"Val   : {len(val_dataset)} finestre")
+    print(f"Test  : {len(test_dataset)} finestre")
 
-    pin_memory = True if device.type == "cuda" else False
+    pin_memory = device.type == "cuda"
 
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=config["training"]["batch_size"],
-        shuffle=True,
-        num_workers=4,
-        pin_memory=pin_memory,
+        train_dataset, batch_size=config["training"]["batch_size"],
+        shuffle=True,  num_workers=4, pin_memory=pin_memory,
     )
     val_loader = DataLoader(
-        val_dataset,
-        batch_size=config["training"]["batch_size"],
-        shuffle=False,
-        num_workers=4,
-        pin_memory=pin_memory,
+        val_dataset, batch_size=config["training"]["batch_size"],
+        shuffle=False, num_workers=4, pin_memory=pin_memory,
     )
     test_loader = DataLoader(
-        test_dataset,
-        batch_size=config["training"]["batch_size"],
-        shuffle=False,
-        num_workers=4,
-        pin_memory=pin_memory,
+        test_dataset, batch_size=config["training"]["batch_size"],
+        shuffle=False, num_workers=4, pin_memory=pin_memory,
     )
 
     # ── 5. Modello ───────────────────────────
@@ -163,42 +160,50 @@ def main():
     )
     scheduler = ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5,
-        patience=5, min_lr=1e-6
+        patience=5, min_lr=1e-6,
     )
 
-    # Class weights calcolati SOLO sul training set
-    train_labels_subset = labels[train_range[0]:train_range[1]]
-    class_weights = compute_class_weights(train_labels_subset).to(device)
-    # criterion = torch.nn.CrossEntropyLoss(weight=class_weights)
-    criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
+    # FIX 3: filtra label -1 e 2 prima di compute_class_weights
+    train_labels_raw   = labels[train_range[0]:train_range[1]]
+    train_labels_valid = train_labels_raw[
+        (train_labels_raw == 0) | (train_labels_raw == 1)
+    ]
+    class_weights = compute_class_weights(train_labels_valid).to(device)
+    criterion = torch.nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
 
-    print(f"Learning rate:  {config['training']['lr']}")
-    print(f"Weight decay:   {config['training']['weight_decay']}")
-    print(f"Class weights:  {class_weights.cpu().numpy()}")
-    print(f"Early stopping patience: {config['training']['patience']}")
+
+    print(f"Learning rate           : {config['training']['lr']}")
+    print(f"Weight decay            : {config['training']['weight_decay']}")
+    print(f"Class weights (0/1)     : {class_weights.cpu().numpy()}")
+    print(f"Early stopping patience : {config['training']['patience']}")
 
     # ── 7. Resume da checkpoint ──────────────
-    resume_path    = "spect_checkpoints-500/last_checkpoint.pth"
-    best_model_path = "spect_checkpoints-500/best_model.pth"
-    resume = config["training"].get("resume", False)
+    resume_path     = "results/checkpoints/EEGNET/last_checkpoint.pth"
+    best_model_path = "results/checkpoints/EEGNET/best_model.pth"
+    resume          = config["training"].get("resume", False)
 
-    start_epoch     = 0
-    best_val_loss   = float("inf")
+    start_epoch      = 0
+    best_val_loss    = float("inf")
     patience_counter = 0
 
-    os.makedirs("spect_checkpoints-500", exist_ok=True)
+    os.makedirs("results/checkpoints/EEGNET", exist_ok=True)
 
+    # FIX 4: se resume=True ma i checkpoint sono di un'architettura diversa
+    #         (es. canali cambiati), cattura il mismatch e riparte da zero
     if resume and os.path.exists(resume_path):
         print(f"\nCaricamento LAST checkpoint: {resume_path}")
         try:
             checkpoint = torch.load(resume_path, map_location=device)
-            model.load_state_dict(checkpoint["model_state_dict"])
+            model.load_state_dict(checkpoint["model_state_dict"], strict=True)
             optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
             start_epoch      = checkpoint["epoch"] + 1
             best_val_loss    = checkpoint.get("best_loss", checkpoint["loss"])
             patience_counter = checkpoint.get("patience_counter", 0)
             print(f"Ripresa da epoca {start_epoch} | best_val_loss={best_val_loss:.4f} | patience={patience_counter}")
+        except RuntimeError as e:
+            print(f"⚠️  Architettura cambiata — checkpoint incompatibile: {e}")
+            print("   Inizio da zero. Elimina i checkpoint se vuoi ripartire pulito.")
         except Exception as e:
             print(f"Errore caricamento checkpoint: {e} — inizio da zero.")
 
@@ -206,12 +211,14 @@ def main():
         print(f"\nCaricamento BEST modello: {best_model_path}")
         try:
             checkpoint = torch.load(best_model_path, map_location=device)
-            model.load_state_dict(checkpoint["model_state_dict"])
+            model.load_state_dict(checkpoint["model_state_dict"], strict=True)
             if "optimizer_state_dict" in checkpoint:
                 optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             if "scheduler_state_dict" in checkpoint:
                 scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
             print(f"BEST caricato | loss={checkpoint['loss']:.4f}")
+        except RuntimeError as e:
+            print(f"⚠️  Architettura cambiata — checkpoint incompatibile: {e}")
         except Exception as e:
             print(f"Errore caricamento best model: {e}")
 
@@ -223,13 +230,12 @@ def main():
     for epoch in range(start_epoch, config["training"]["epochs"]):
         print(f"\n📌 Epoch {epoch + 1}/{config['training']['epochs']}")
 
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
+        train_loss              = train_epoch(model, train_loader, optimizer, criterion, device)
         val_loss, val_acc, val_f1 = validate(model, val_loader, criterion, device)
-        current_lr = optimizer.param_groups[0]["lr"]
+        current_lr              = optimizer.param_groups[0]["lr"]
 
-        print(f" Train Loss: {train_loss:.4f}")
-        print("\n")
-        print(f" Val Loss: {val_loss:.4f} | Acc: {val_acc:.2%} | F1: {val_f1:.3f} | LR: {current_lr:.2e}")
+        print(f"  Train Loss : {train_loss:.4f}")
+        print(f"  Val Loss   : {val_loss:.4f} | Acc: {val_acc:.2%} | F1: {val_f1:.3f} | LR: {current_lr:.2e}")
 
         scheduler.step(val_loss)
 
@@ -237,12 +243,11 @@ def main():
             best_val_loss    = val_loss
             patience_counter = 0
             save_checkpoint(model, optimizer, scheduler, epoch, val_loss, best_model_path)
-            print(f" ✅ Miglior modello! (loss: {best_val_loss:.4f})")
+            print(f"  ✅ Miglior modello! (loss: {best_val_loss:.4f})")
         else:
             patience_counter += 1
-            print(f"⏳ Patience: {patience_counter}/{config['training']['patience']}")
+            print(f"  ⏳ Patience: {patience_counter}/{config['training']['patience']}")
 
-        # Salva sempre il last checkpoint
         save_checkpoint(
             model, optimizer, scheduler, epoch, val_loss,
             resume_path,
@@ -250,7 +255,6 @@ def main():
             patience_counter=patience_counter,
         )
 
-        # Early stopping
         if patience_counter >= config["training"]["patience"]:
             print(f"\n🛑 Early stopping dopo {config['training']['patience']} epoche senza miglioramenti.")
             break
@@ -265,14 +269,13 @@ def main():
     print(f"Caricato miglior modello (epoca {checkpoint['epoch'] + 1}, loss={checkpoint['loss']:.4f})")
 
     test_acc = evaluate_model(model, test_loader, device)
-    print(f"Test Accuracy: {test_acc:.2%}")
+    print(f"\n🎯 Test Accuracy: {test_acc:.2%}")
 
-    # Salva risultati
     final_epoch = checkpoint["epoch"] + 1
-    with open("./results.txt", "w") as f:
-        f.write(f"Test Accuracy:  {test_acc:.2%}\n")
-        f.write(f"Best Val Loss:  {best_val_loss:.4f}\n")
-        f.write(f"Final Epoch:    {final_epoch}\n")
+    with open("./results/checkpoints/EEGNET/results.txt", "w") as f:
+        f.write(f"Test Accuracy : {test_acc:.2%}\n")
+        f.write(f"Best Val Loss : {best_val_loss:.4f}\n")
+        f.write(f"Final Epoch   : {final_epoch}\n")
 
     print("Training completato! Risultati in results.txt")
     print(f"Checkpoints: {best_model_path} | {resume_path}")

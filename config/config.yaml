@@ -16,7 +16,8 @@ training:
   weight_decay: 0.005
   epochs: 50
   patience: 15
-  resume: True
+  resume: true
+  label_smoothing: 0.1
 
 
 model:
@@ -35,35 +36,37 @@ training_spectrogram:
   epochs: 50
   patience: 10
 
-# ── Pipeline GAF (GAFNet) ──
-training_gaf:
-  window_size: 500
-  stride: 250
-  batch_size: 32
-  lr: 0.0005
-  weight_decay: 0.005
-  epochs: 50
-  patience: 10
-  gaf_type: "GADF"  #"GASF"
-  image_size: 16
+## ── Pipeline GAF (GAFNet) ──
+#training_gaf:
+#  window_size: 1000
+#  stride: 250
+#  batch_size: 32
+#  lr: 0.0005
+#  weight_decay: 0.005
+#  epochs: 50
+#  patience: 10
+#  gaf_type: "GADF"  #"GASF"
+#  image_size: 16
+#  dropout: 0.25
+#  resume: false
 
 
 # ── Pipeline ViT ──
 training_vit:
-  window_size: 500
-  stride: 50
-  batch_size: 16          # tenere basso, ViT è pesante
-  lr: 0.0003
-  weight_decay: 0.01
+  window_size: 1000
+  stride: 250
+  batch_size: 32
+  lr: 0.00005
+  weight_decay: 0.005
   dropout: 0.3
   epochs: 50
-  patience: 20
-  gaf_type: "GADF"
+  patience: 15
+  gaf_type: "GASF"  #GASF - #GADF
   image_size: 64
-  target_size: 64
-  freeze_vit: true       # true = allena solo head (più veloce ma meno flessibile)
-  model_name: "deit_tiny_patch16_224"   #alternativa --> vit_base_patch16_224 ; deit_tiny_patch16_224 ; vit_small_patch16_224
-
+  target_size: 224
+  freeze_vit: false
+  model_name: "vit_small_patch16_224"   #alternativa --> vit_base_patch16_224 ; deit_tiny_patch16_224 ; vit_small_patch16_224
+  resume: false
 
 split:
   train: [0, 113000]

@@ -1,6 +1,4 @@
 # main_vit.py
-# Training pipeline per EEGViT (vit_small o vit_base su immagini GAF)
-
 import torch
 import numpy as np
 import os
@@ -9,12 +7,10 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from sklearn.metrics import classification_report
 
-from src import load_eeg_data, filter_eeg, create_labels
-from src import compute_class_weights
+from src import load_eeg_data, filter_eeg, create_labels, compute_class_weights
 from src_vit import EEGViTDataset, EEGViT
 
 
-# ─────────────────────────────────────────────
 def save_checkpoint(model, optimizer, scheduler, epoch, loss, filepath,
                     best_loss=None, patience_counter=None):
     ckpt = {
@@ -67,8 +63,7 @@ def evaluate(model, loader, device):
     with torch.no_grad():
         for x, y in loader:
             x    = x.to(device)
-            out  = model(x)
-            pred = out.argmax(dim=1)
+            pred = model(x).argmax(dim=1)
             all_preds.extend(pred.cpu().numpy())
             all_labels.extend(y.numpy())
     all_preds  = np.array(all_preds)
@@ -83,29 +78,30 @@ def evaluate(model, loader, device):
     return acc
 
 
-# ─────────────────────────────────────────────
 def main():
 
     # ── 1. Config ────────────────────────────
-    with open("./config/config.yaml", "r") as f:
+    with open("./config/config.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Dispositivo: {device}")
-
-    cfg        = config["training_vit"]
+    device      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cfg         = config["training_vit"]
     window_size = cfg["window_size"]
-    stride      = cfg.get("stride", 250)
-    gaf_type    = cfg.get("gaf_type", "GASF")
-    image_size  = cfg.get("image_size", 32)
-    target_size = cfg.get("target_size", 224)
-    model_name  = cfg.get("model_name", "vit_small_patch16_224")
-    freeze_vit  = cfg.get("freeze_vit", False)
+    stride      = cfg["stride"]
+    gaf_type    = cfg["gaf_type"]
+    image_size  = cfg["image_size"]
+    target_size = cfg["target_size"]
+    model_name  = cfg["model_name"]
+    freeze_vit  = cfg["freeze_vit"]
+    dropout     = cfg["dropout"]
+    resume      = cfg["resume"]
     fs          = config["data"]["fs"]
 
-    print(f"Modello:    {model_name}")
-    print(f"GAF:        {gaf_type} {image_size}→{target_size}px")
-    print(f"Freeze ViT: {freeze_vit}")
+    print(f"🖥️  Dispositivo : {device}")
+    print(f"🤖 Modello     : {model_name}")
+    print(f"🖼️  GAF         : {gaf_type} {image_size}→{target_size}px")
+    print(f"🧊 Freeze ViT  : {freeze_vit}")
+    print(f"🔄 Resume      : {resume}")
 
     # ── 2. Preprocessing ─────────────────────
     print("\n" + "="*55)
@@ -120,11 +116,16 @@ def main():
         fs=fs,
     )
 
-    labels = create_labels(config["data"]["events_path"], fs=fs)
-    T      = df.shape[1]
-    labels = labels[:T] if len(labels) > T else np.pad(labels, (0, T - len(labels)))
-
-    print(f"EEG: {df.shape} | labels: {len(labels)} | dist: {np.bincount(labels)}")
+    labels = create_labels(
+        config["data"]["events_path"],
+        total_samples=df.shape[1],
+        fs=fs,
+    )
+    vals, counts = np.unique(labels, return_counts=True)
+    label_names  = {-1: "Non assegnato", 0: "Riposo", 1: "Motor Imagery", 2: "Preparazione"}
+    print(f"EEG shape: {df.shape} | labels: {len(labels)}")
+    for v, c in zip(vals, counts):
+        print(f"  {label_names.get(int(v), str(v)):20s}: {c} ({100*c/len(labels):.1f}%)")
 
     # ── 3. Dataset ───────────────────────────
     train_range = tuple(config["split"]["train"])
@@ -138,24 +139,22 @@ def main():
     train_dataset = EEGViTDataset(
         df, labels, train_range, window_size, stride=stride,
         gaf_type=gaf_type, image_size=image_size,
-        target_size=target_size, augment=True
+        target_size=target_size, augment=True,
     )
     val_dataset = EEGViTDataset(
         df, labels, val_range, window_size, stride=stride,
         gaf_type=gaf_type, image_size=image_size,
-        target_size=target_size, augment=False
+        target_size=target_size, augment=False,
     )
     test_dataset = EEGViTDataset(
         df, labels, test_range, window_size, stride=stride,
         gaf_type=gaf_type, image_size=image_size,
-        target_size=target_size, augment=False
+        target_size=target_size, augment=False,
     )
 
-    # metti questo subito dopo create_labels in main_vit.py e dimmi l'output
-    print(np.bincount(labels))
-    print(f"Train finestre: {len(train_dataset)}")
-    print(f"Val finestre:   {len(val_dataset)}")
-    print(f"Test finestre:  {len(test_dataset)}")
+    print(f"📦 Train finestre: {len(train_dataset)}")
+    print(f"📦 Val finestre  : {len(val_dataset)}")
+    print(f"📦 Test finestre : {len(test_dataset)}")
 
     pin_memory = device.type == "cuda"
     bs = cfg["batch_size"]
@@ -177,14 +176,12 @@ def main():
         n_classes=config["model"]["n_classes"],
         model_name=model_name,
         pretrained=True,
-        dropout=cfg.get("dropout", 0.3),
+        dropout=dropout,
         freeze_vit=freeze_vit,
         target_size=target_size,
     ).to(device)
 
     # ── 5. Ottimizzatore ─────────────────────
-    # Se ViT è congelato, allena solo channel_proj + classifier
-    # Se ViT è libero, usa lr differenziato (ViT più basso)
     if freeze_vit:
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, model.parameters()),
@@ -198,32 +195,72 @@ def main():
             {"params": model.classifier.parameters(),   "lr": cfg["lr"]},
         ], weight_decay=cfg["weight_decay"])
 
-    scheduler = CosineAnnealingLR(
-        optimizer,
-        T_max=cfg["epochs"],
-        eta_min=1e-6,
-    )
+    scheduler = CosineAnnealingLR(optimizer, T_max=cfg["epochs"], eta_min=1e-6)
 
-    train_labels_sub = labels[train_range[0]:train_range[1]]
-    class_weights    = compute_class_weights(train_labels_sub).to(device)
-    criterion        = torch.nn.CrossEntropyLoss(weight=class_weights)
+    train_labels_raw   = labels[train_range[0]:train_range[1]]
+    train_labels_valid = train_labels_raw[
+        (train_labels_raw == 0) | (train_labels_raw == 1)
+    ]
+    class_weights = compute_class_weights(train_labels_valid).to(device)
+    criterion     = torch.nn.CrossEntropyLoss(weight=class_weights)
 
-    # ── 6. Checkpoint ────────────────────────
-    safe_name = model_name.replace("/", "_")
-    ckpt_dir  = f"./checkpoints_vit/{safe_name}"
-    best_path = f"{ckpt_dir}/best_model.pth"
-    last_path = f"{ckpt_dir}/last_checkpoint.pth"
+    print(f"⚙️  LR            : {cfg['lr']} | WD: {cfg['weight_decay']}")
+    print(f"⚖️  Class weights : {class_weights.cpu().numpy()}")
+    print(f"🕐 Patience      : {cfg['patience']}")
+
+    # ── 6. Checkpoint dir ────────────────────
+    safe_name   = model_name.replace("/", "_")
+    ckpt_dir    = f"./results/checkpoints/VIT/{safe_name}"
+    best_path   = f"{ckpt_dir}/best_model.pth"
+    last_path   = f"{ckpt_dir}/last_checkpoint.pth"
+    result_file = f"{ckpt_dir}/results.txt"
     os.makedirs(ckpt_dir, exist_ok=True)
 
     best_val_loss    = float("inf")
     patience_counter = 0
+    start_epoch      = 0
+
+    # ── 6b. Resume ───────────────────────────
+    if resume and os.path.exists(last_path):
+        print(f"\n🔄 Caricamento LAST checkpoint: {last_path}")
+        try:
+            checkpoint       = torch.load(last_path, map_location=device)
+            model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            start_epoch      = checkpoint["epoch"] + 1
+            best_val_loss    = checkpoint.get("best_loss", checkpoint["loss"])
+            patience_counter = checkpoint.get("patience_counter", 0)
+            print(f"▶️  Ripresa da epoca {start_epoch} | best_val_loss={best_val_loss:.4f} | patience={patience_counter}")
+        except RuntimeError as e:
+            print(f"⚠️  Architettura cambiata — checkpoint incompatibile: {e}")
+            print("   Inizio da zero.")
+        except Exception as e:
+            print(f"⚠️  Errore caricamento checkpoint: {e} — inizio da zero.")
+
+    elif resume and os.path.exists(best_path):
+        print(f"\n📂 Caricamento BEST modello: {best_path}")
+        try:
+            checkpoint       = torch.load(best_path, map_location=device)
+            model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+            if "optimizer_state_dict" in checkpoint:
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            if "scheduler_state_dict" in checkpoint:
+                scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            start_epoch      = checkpoint["epoch"] + 1
+            best_val_loss    = checkpoint.get("best_loss", checkpoint["loss"])
+            print(f"✅ BEST caricato | loss={checkpoint['loss']:.4f} | ripresa da epoca {start_epoch}")
+        except RuntimeError as e:
+            print(f"⚠️  Architettura cambiata — checkpoint incompatibile: {e}")
+        except Exception as e:
+            print(f"⚠️  Errore caricamento best model: {e}")
 
     # ── 7. Training ──────────────────────────
     print("\n" + "="*55)
-    print(f"INIZIO TRAINING — EEGViT ({model_name})")
+    print(f"🚀 INIZIO TRAINING — EEGViT ({model_name})")
     print("="*55)
 
-    for epoch in range(cfg["epochs"]):
+    for epoch in range(start_epoch, cfg["epochs"]):
         print(f"\n📌 Epoch {epoch+1}/{cfg['epochs']}")
 
         train_loss, train_acc = train_epoch(model, train_loader, optimizer, criterion, device)
@@ -239,7 +276,7 @@ def main():
             best_val_loss    = val_loss
             patience_counter = 0
             save_checkpoint(model, optimizer, scheduler, epoch, val_loss, best_path)
-            print(f"  ✅ Best model! (loss: {best_val_loss:.4f})")
+            print(f"  🏆 Nuovo best model! (loss: {best_val_loss:.4f})")
         else:
             patience_counter += 1
             print(f"  ⏳ Patience: {patience_counter}/{cfg['patience']}")
@@ -253,18 +290,16 @@ def main():
 
     # ── 8. Test finale ───────────────────────
     print("\n" + "="*55)
-    print(f"VALUTAZIONE FINALE — {model_name}")
+    print(f"🏁 VALUTAZIONE FINALE — {model_name}")
     print("="*55)
 
     ckpt = torch.load(best_path, map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
-    print(f"Caricato best model (epoca {ckpt['epoch']+1}, loss={ckpt['loss']:.4f})")
+    print(f"📂 Caricato best model (epoca {ckpt['epoch']+1}, loss={ckpt['loss']:.4f})")
 
     test_acc = evaluate(model, test_loader, device)
-    print(f"Test Accuracy: {test_acc:.2%}")
+    print(f"\n🎯 Test Accuracy: {test_acc:.2%}")
 
-    os.makedirs("./results", exist_ok=True)
-    result_file = f"./results/results_vit_{safe_name}.txt"
     with open(result_file, "w", encoding="utf-8") as f:
         f.write(f"Model:         EEGViT\n")
         f.write(f"Backbone:      {model_name}\n")
@@ -272,11 +307,12 @@ def main():
         f.write(f"Image size:    {image_size}→{target_size}px\n")
         f.write(f"Freeze ViT:    {freeze_vit}\n")
         f.write(f"Window size:   {window_size}\n")
+        f.write(f"Stride:        {stride}\n")
         f.write(f"Test Accuracy: {test_acc:.2%}\n")
         f.write(f"Best Val Loss: {best_val_loss:.4f}\n")
         f.write(f"Best Epoch:    {ckpt['epoch']+1}\n")
 
-    print(f"Risultati salvati in {result_file}")
+    print(f"📄 Risultati salvati in {result_file}")
 
 
 if __name__ == "__main__":

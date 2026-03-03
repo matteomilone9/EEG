@@ -14,8 +14,8 @@ training:
   batch_size: 32
   lr: 0.0005
   weight_decay: 0.005
-  epochs: 50
-  patience: 15
+  epochs: 100
+  patience: 20
   resume: true
   label_smoothing: 0.1
 
@@ -60,13 +60,13 @@ training_vit:
   weight_decay: 0.005
   dropout: 0.3
   epochs: 50
-  patience: 15
-  gaf_type: "GASF"  #GASF - #GADF
-  image_size: 64
+  patience: 5
+  gaf_type: "GADF"  #GASF - #GADF
+  image_size: 32
   target_size: 224
   freeze_vit: false
-  model_name: "vit_small_patch16_224"   #alternativa --> vit_base_patch16_224 ; deit_tiny_patch16_224 ; vit_small_patch16_224
-  resume: false
+  model_name: "deit_tiny_patch16_224"   #alternativa --> vit_base_patch16_224 ; deit_tiny_patch16_224 ; vit_small_patch16_224
+  resume: true
 
 split:
   train: [0, 113000]

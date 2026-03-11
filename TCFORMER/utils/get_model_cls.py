@@ -1,5 +1,6 @@
 from models import (
     TCFormer,
+    TCFormerGAF,
     # ATCNet,
     # ATCNet_2_0,
     # BaseNet,
@@ -16,8 +17,9 @@ from models import (
 
 
 model_dict = dict(
-    # SST_DPN=SST_DPN,
     TCFormer=TCFormer,
+    TCFormerGAF=TCFormerGAF,        # ← aggiunto
+    # SST_DPN=SST_DPN,
     # ATCNet=ATCNet,
     # ATCNet_2_0 = ATCNet_2_0,
     # BaseNet=BaseNet,

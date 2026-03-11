@@ -1,5 +1,5 @@
 # from .atcnet import ATCNet
-from .tcformer import TCFormer
+from .tcformer import TCFormer, TCFormerGAF
 # from .basenet import BaseNet
 # from .eegconformer import EEGConformer
 # from .eegnet import EEGNet

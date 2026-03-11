@@ -196,7 +196,6 @@ def parse_arguments():
                         help="Disable inter-trial augmentation (overrides config if specified)")
     return parser.parse_args()
 
-
 # ----------------------------------------------
 # Main function to run the training and testing pipeline
 # ----------------------------------------------

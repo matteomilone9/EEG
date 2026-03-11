@@ -204,7 +204,7 @@ def run():
     args = parse_arguments()
      
     # load config
-    config_path = os.path.join(CONFIG_DIR, f"{args.model}.yaml") 
+    config_path = os.path.join(CONFIG_DIR, f"{args.model}.yaml")
     with open(config_path) as f:    
         config = yaml.safe_load(f)
 

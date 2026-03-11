@@ -183,10 +183,10 @@ def parse_arguments():
         help="Name of the dataset to use."
                         "Options: bcic2a, bcic2b, hgd, reh_mi, bcic3"
     )
-    parser.add_argument("--loso", action="store_true", default=False, 
+    parser.add_argument("--loso", action="store_true", default=True,
         help="Enable subject-independent (LOSO) mode"
     )
-    parser.add_argument("--gpu_id", type=int, default=1, help="GPU device ID to use")
+    parser.add_argument("--gpu_id", type=int, default=0, help="GPU device ID to use")
     
     parser.add_argument("--seed", type=int, default=None, 
                         help="Random seed value (overrides config if specified)")

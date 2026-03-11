@@ -1,5 +1,5 @@
 # general
-dataset_name: ""   # options: "bcic2a", "bcic2b", "bcic3", "reh_mi", or "hgd".
+dataset_name: "bcic2a"   # options: "bcic2a", "bcic2b", "bcic3", "reh_mi", or "hgd".
                    # Note: This value will be overridden if specified in train_test.py
                    # or if passed as a command-line argument (e.g., --dataset bcic2a).
                    

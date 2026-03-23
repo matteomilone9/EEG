@@ -1,6 +1,11 @@
 # classification_module_gaf.py
 """
 ClassificationModule con auxiliary GAF distillation loss.
+
+Modalità supportate (controllate da YAML):
+  A) use_joint_training=False, ae_ckpt_path=<path>  → encoder pretrained + frozen     (vecchio approccio)
+  B) use_joint_training=True,  ae_ckpt_path=<path>  → encoder pretrained + trainabile (pretrained joint)
+  C) use_joint_training=True,  ae_ckpt_path=null    → encoder random + trainabile     (nuovo approccio)
 """
 import random
 from pathlib import Path
@@ -16,11 +21,11 @@ from torchmetrics.classification import MulticlassCohenKappa, MulticlassConfusio
 import pytorch_lightning as pl
 from utils.lr_scheduler import linear_warmup_cosine_decay
 from gaf_utils import compute_gaf
-from gaf_autoencoder import GAFAutoencoder
+from gaf_autoencoder import GAFAutoencoder, GAFEncoder
 
 
 # --------------------------------------------------------------------------- #
-#  Helpers
+# Helpers
 # --------------------------------------------------------------------------- #
 def select_random_channels(x, keep_ratio=0.9):
     B, C, T = x.shape
@@ -38,32 +43,66 @@ def random_channel_mask(x, keep_ratio=0.9):
 
 
 # --------------------------------------------------------------------------- #
-#  GAF encoder utility
+# GAF encoder utility
 # --------------------------------------------------------------------------- #
 class GAFLatentExtractor(nn.Module):
     """
-    Wrapper frozen attorno a GAFAutoencoder.encoder.
-    Prende EEG raw (B, C, T) → media dei latent per canale → (B, latent_dim).
+    Prende EEG raw (B, C, T) → GAF images → GAFEncoder → media sui canali → (B, latent_dim).
+
+    Tre modalità:
+      A) ae_ckpt_path != None, use_joint_training=False  → pretrained frozen
+      B) ae_ckpt_path != None, use_joint_training=True   → pretrained trainabile
+      C) ae_ckpt_path is None, use_joint_training=True   → random init trainabile
     """
-    def __init__(self, ae_ckpt_path: str, gaf_size: int = 128, gaf_mode: str = "both"):
+    def __init__(
+        self,
+        gaf_size: int = 128,
+        gaf_mode: str = "both",
+        latent_dim: int = 128,
+        ae_ckpt_path: str = None,
+        use_joint_training: bool = True,
+    ):
         super().__init__()
         self.gaf_size = gaf_size
         self.gaf_mode = gaf_mode
+        self.use_joint_training = use_joint_training
 
-        ae = GAFAutoencoder.load_from_checkpoint(ae_ckpt_path)
-        self.encoder = ae.encoder
-        self.latent_dim = ae.encoder.latent_dim
+        in_channels = 2 if gaf_mode == "both" else 1
 
-        for p in self.encoder.parameters():
-            p.requires_grad_(False)
-        self.encoder.eval()
+        if ae_ckpt_path is not None:
+            # Modalità A o B: carica encoder dal checkpoint
+            ae = GAFAutoencoder.load_from_checkpoint(ae_ckpt_path)
+            self.encoder = ae.encoder
+            print(f"[GAFLatentExtractor] Loaded encoder from: {ae_ckpt_path}")
+        else:
+            # Modalità C: encoder inizializzato da zero
+            self.encoder = GAFEncoder(in_channels=in_channels, latent_dim=latent_dim)
+            print(f"[GAFLatentExtractor] Random init encoder (joint training from scratch)")
 
-    @torch.no_grad()
-    def forward(self, x_raw: torch.Tensor) -> torch.Tensor:
+        self.latent_dim = self.encoder.latent_dim
+
+        if not use_joint_training:
+            # Modalità A: frozen
+            for p in self.encoder.parameters():
+                p.requires_grad_(False)
+            self.encoder.eval()
+            print(f"[GAFLatentExtractor] Encoder frozen")
+        else:
+            # Modalità B o C: trainabile
+            for p in self.encoder.parameters():
+                p.requires_grad_(True)
+            print(f"[GAFLatentExtractor] Encoder trainable (joint training)")
+
+    def _compute_gaf_tensor(self, x_raw: torch.Tensor) -> torch.Tensor:
+        """
+        EEG raw → GAF images come tensore.
+        Il passaggio numpy spezza il grafo computazionale sulla trasformazione GAF
+        (corretta: GAF è fissa, non parametrica). I gradienti fluiscono
+        dentro self.encoder a partire dal tensore gaf_t.
+        """
         B, C, T = x_raw.shape
         device = x_raw.device
-
-        x_np  = x_raw.cpu().numpy()
+        x_np = x_raw.detach().cpu().numpy()
         gaf_np = compute_gaf(x_np, gaf_size=self.gaf_size, mode=self.gaf_mode)
 
         if self.gaf_mode == "both":
@@ -73,12 +112,33 @@ class GAFLatentExtractor(nn.Module):
             gaf_t = torch.from_numpy(gaf_np).to(device)
             gaf_t = gaf_t.view(B * C, 1, self.gaf_size, self.gaf_size)
 
-        z = self.encoder(gaf_t.float())
-        return z.view(B, C, -1).mean(dim=1)   # (B, latent_dim)
+        return gaf_t.float()
+
+    def forward(self, x_raw: torch.Tensor) -> torch.Tensor:
+        B, C, _ = x_raw.shape
+        gaf_t = self._compute_gaf_tensor(x_raw)  # (B*C, in_ch, H, W)
+
+        if self.use_joint_training:
+            z = self.encoder(gaf_t)               # gradienti fluiscono
+        else:
+            with torch.no_grad():
+                z = self.encoder(gaf_t)            # frozen, no grad
+
+        return z.view(B, C, -1).mean(dim=1)       # (B, latent_dim)
+
+    def train(self, mode: bool = True):
+        """
+        Override: in modalità frozen l'encoder resta sempre in eval
+        anche quando Lightning chiama .train() sul modulo padre.
+        """
+        super().train(mode)
+        if not self.use_joint_training:
+            self.encoder.eval()
+        return self
 
 
 # --------------------------------------------------------------------------- #
-#  Projector
+# Projector
 # --------------------------------------------------------------------------- #
 class AuxProjector(nn.Module):
     def __init__(self, d_tcf: int, latent_dim: int):
@@ -96,25 +156,28 @@ class AuxProjector(nn.Module):
 
 
 # --------------------------------------------------------------------------- #
-#  ClassificationModuleGAF
+# ClassificationModuleGAF
 # --------------------------------------------------------------------------- #
 class ClassificationModuleGAF(pl.LightningModule):
     """
-    Drop-in replacement di ClassificationModule con auxiliary GAF distillation.
-
-    L_total = L_cls  +  lambda_aux * L_aux
+    L_total = L_cls + lambda_aux * L_aux
     L_aux   = 1 - cosine_similarity(projector(tcf_features), z_gaf).mean()
 
-    A inference time: solo TCFormer + projector, nessun overhead GAF.
+    Configurazione via YAML:
+      ae_ckpt_path: null          # null = random init, path = pretrained
+      use_joint_training: true    # true = encoder trainabile, false = frozen
+      latent_dim: 128             # usato solo se ae_ckpt_path è null
     """
     def __init__(
         self,
         model,
         n_classes: int,
-        ae_ckpt_path: str,
         d_tcf: int,
         gaf_size: int = 128,
         gaf_mode: str = "both",
+        latent_dim: int = 128,
+        ae_ckpt_path: str = None,
+        use_joint_training: bool = True,
         lambda_aux: float = 0.1,
         lambda_aux_final: float = 0.0,
         use_lambda_schedule: bool = True,
@@ -130,12 +193,17 @@ class ClassificationModuleGAF(pl.LightningModule):
         self.save_hyperparameters(ignore=["model"])
         self.model = model
 
-        self.gaf_extractor = GAFLatentExtractor(ae_ckpt_path, gaf_size, gaf_mode)
-        latent_dim = self.gaf_extractor.latent_dim
-        self.aux_projector = AuxProjector(d_tcf, latent_dim)
+        self.gaf_extractor = GAFLatentExtractor(
+            gaf_size=gaf_size,
+            gaf_mode=gaf_mode,
+            latent_dim=latent_dim,
+            ae_ckpt_path=ae_ckpt_path,
+            use_joint_training=use_joint_training,
+        )
+        self.aux_projector = AuxProjector(d_tcf, self.gaf_extractor.latent_dim)
 
-        self.test_kappa   = MulticlassCohenKappa(num_classes=n_classes)
-        self.test_cm      = MulticlassConfusionMatrix(num_classes=n_classes)
+        self.test_kappa = MulticlassCohenKappa(num_classes=n_classes)
+        self.test_cm = MulticlassConfusionMatrix(num_classes=n_classes)
         self.test_confmat = None
 
     # ------------------------------------------------------------------ #
@@ -143,10 +211,6 @@ class ClassificationModuleGAF(pl.LightningModule):
         return self.model(x)
 
     def _get_features(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Usa get_features() esposto da TCFormerModule.
-        Returns: (B, d_tcf)  — media sul tempo
-        """
         features = self.model.get_features(x)   # (B, d_tcf, T')
         return features.mean(dim=-1)             # (B, d_tcf)
 
@@ -161,25 +225,36 @@ class ClassificationModuleGAF(pl.LightningModule):
     # ------------------------------------------------------------------ #
     def configure_optimizers(self):
         betas = self.hparams.get("beta_1", 0.9), self.hparams.get("beta_2", 0.999)
-        params = list(self.model.parameters()) + list(self.aux_projector.parameters())
+
+        params = (
+            list(self.model.parameters()) +
+            list(self.aux_projector.parameters())
+        )
+        if self.hparams.use_joint_training:
+            params += list(self.gaf_extractor.encoder.parameters())
+
         if self.hparams.optimizer == "adam":
-            optimizer = torch.optim.Adam(params, lr=self.hparams.lr,
-                                         betas=betas,
-                                         weight_decay=self.hparams.weight_decay)
+            optimizer = torch.optim.Adam(
+                params, lr=self.hparams.lr, betas=betas,
+                weight_decay=self.hparams.weight_decay)
         elif self.hparams.optimizer == "adamW":
-            optimizer = torch.optim.AdamW(params, lr=self.hparams.lr,
-                                          betas=betas,
-                                          weight_decay=self.hparams.weight_decay)
+            optimizer = torch.optim.AdamW(
+                params, lr=self.hparams.lr, betas=betas,
+                weight_decay=self.hparams.weight_decay)
         elif self.hparams.optimizer == "sgd":
-            optimizer = torch.optim.SGD(params, lr=self.hparams.lr,
-                                        weight_decay=self.hparams.weight_decay)
+            optimizer = torch.optim.SGD(
+                params, lr=self.hparams.lr,
+                weight_decay=self.hparams.weight_decay)
         else:
             raise NotImplementedError
+
         if self.hparams.scheduler:
             sched = LambdaLR(
                 optimizer,
-                linear_warmup_cosine_decay(self.hparams.warmup_epochs,
-                                           self.hparams.max_epochs)
+                linear_warmup_cosine_decay(
+                    self.hparams.warmup_epochs,
+                    self.hparams.max_epochs,
+                )
             )
             return [optimizer], [sched]
         return [optimizer]
@@ -212,9 +287,9 @@ class ClassificationModuleGAF(pl.LightningModule):
 
         l_aux = torch.tensor(0.0, device=x.device)
         if mode == "train":
-            tcf_feat = self._get_features(x)                 # (B, d_tcf)
-            z_proj   = self.aux_projector(tcf_feat)          # (B, latent_dim)
-            z_gaf    = self.gaf_extractor(x)                 # (B, latent_dim)
+            tcf_feat = self._get_features(x)        # (B, d_tcf)
+            z_proj   = self.aux_projector(tcf_feat)  # (B, latent_dim)
+            z_gaf    = self.gaf_extractor(x)         # (B, latent_dim)
             l_aux    = 1.0 - F.cosine_similarity(z_proj, z_gaf, dim=-1).mean()
 
         lam  = self._lambda_aux() if mode == "train" else 0.0
@@ -222,8 +297,10 @@ class ClassificationModuleGAF(pl.LightningModule):
 
         acc = accuracy(y_hat, y, task="multiclass",
                        num_classes=self.hparams.n_classes)
+
         self.log(f"{mode}_loss", loss, prog_bar=True,  on_step=False, on_epoch=True)
         self.log(f"{mode}_acc",  acc,  prog_bar=True,  on_step=False, on_epoch=True)
+
         if mode == "train":
             self.log("aux_loss",   l_aux, prog_bar=False, on_step=False, on_epoch=True)
             self.log("lambda_aux", lam,   prog_bar=False, on_step=False, on_epoch=True)
@@ -237,6 +314,7 @@ class ClassificationModuleGAF(pl.LightningModule):
 
         return loss, acc
 
+    # ------------------------------------------------------------------ #
     def on_test_epoch_end(self):
         cm_counts = self.test_cm.compute()
         self.test_cm.reset()

@@ -1,5 +1,6 @@
 from datamodules import BCICIII_IVa, BCICIII_IVaLOSO, BCICIV2a, BCICIV2aTVT,\
     BCICIV2aLOSO, BCICIV2b, BCICIV2bLOSO, HighGamma, HighGammaLOSO, REH_MI
+from datamodules.bcic4_2a_ea import BCICIV2aLOSO_EA
 
 
 def get_datamodule_cls(dataset_name):
@@ -13,6 +14,8 @@ def get_datamodule_cls(dataset_name):
         datamodule_cls = BCICIV2aTVT
     elif dataset_name == "bcic2a_loso":
         datamodule_cls = BCICIV2aLOSO
+    elif dataset_name == "bcic2a_loso_ea":                 # ← nuovo
+        datamodule_cls = BCICIV2aLOSO_EA
     elif dataset_name == "bcic2b":
         datamodule_cls = BCICIV2b
     elif dataset_name == "bcic2b_loso":

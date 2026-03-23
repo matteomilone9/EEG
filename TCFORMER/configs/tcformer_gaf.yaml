@@ -1,7 +1,7 @@
 # tcformer_gaf.yaml
 
 # general
-dataset_name: "bcic2a"
+dataset_name: "bcic2a_loso_ea"   # ← usa il datamodule con Euclidean Alignment
 subject_ids: "all"
 max_epochs: 100
 max_epochs_2b: 500
@@ -20,6 +20,7 @@ preprocessing:
     start: 0.0
     stop: 0.0
     batch_size: 48
+    euclidean_alignment: true   # ← attiva EA in BCICIV2aLOSO_EA
   bcic2b:
     sfreq: 250
     low_cut: null
@@ -83,10 +84,13 @@ model_kwargs:
   warmup_epochs: 20
   warmup_epochs_loso: 3
 
-  # GAF distillation  ← unica aggiunta rispetto a tcformer.yaml
-  ae_ckpt_path: "gaf_checkpoints/gaf_ae_bcic2a_lat128_sz128_epoch=031_val_loss=0.0007.ckpt"
+  # GAF distillation
+  ae_ckpt_path: null          # null = random init (nuovo approccio)
   gaf_size: 128
   gaf_mode: "both"
+  latent_dim: 128             # usato solo se ae_ckpt_path è null
   lambda_aux: 0.1
   lambda_aux_final: 0.0
   use_lambda_schedule: true
+  use_joint_training: true
+

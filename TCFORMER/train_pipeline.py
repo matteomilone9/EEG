@@ -5,7 +5,6 @@ from datetime import datetime
 from argparse import ArgumentParser
 from pytorch_lightning import Trainer
 from pytorch_lightning.strategies import DDPStrategy
-
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 

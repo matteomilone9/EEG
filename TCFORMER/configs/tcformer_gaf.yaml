@@ -1,7 +1,7 @@
 # tcformer_gaf.yaml
 
 # general
-dataset_name: "bcic2a_loso_ea"   # ← usa il datamodule con Euclidean Alignment
+dataset_name: "bcic2a_loso_ea"
 subject_ids: "all"
 max_epochs: 100
 max_epochs_2b: 500
@@ -20,7 +20,7 @@ preprocessing:
     start: 0.0
     stop: 0.0
     batch_size: 48
-    euclidean_alignment: true   # ← attiva EA in BCICIV2aLOSO_EA
+    euclidean_alignment: true
   bcic2b:
     sfreq: 250
     low_cut: null
@@ -78,7 +78,7 @@ model_kwargs:
   # Optimizer
   lr: 0.0009
   beta_1: 0.5
-  weight_decay: 0.001
+  weight_decay: 0.001        # L2 tramite ottimizzatore
   optimizer: "adam"
   scheduler: True
   warmup_epochs: 20
@@ -88,9 +88,13 @@ model_kwargs:
   ae_ckpt_path: null          # null = random init (nuovo approccio)
   gaf_size: 128
   gaf_mode: "both"
-  latent_dim: 128             # usato solo se ae_ckpt_path è null
-  lambda_aux: 0.1
-  lambda_aux_final: 0.0
-  use_lambda_schedule: true
+  latent_dim: 128
   use_joint_training: true
 
+  # Lambda schedule — parte alto, scende a zero
+  lambda_aux: 0.5             # alto nelle prime epoch → GAFEncoder si stabilizza
+  lambda_aux_final: 0.0       # scende → TCFormer si concentra sulla classificazione
+  use_lambda_schedule: true
+
+  # Elastic Net (L1 + L2)
+  l1_lambda: 0.00001          # L1 esplicita sulla loss

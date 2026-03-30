@@ -138,6 +138,9 @@ def parse_arguments():
     parser.add_argument("--loso", action="store_true", default=True,
         help="Enable subject-independent (LOSO) mode"
     )
+    parser.add_argument("--ea", action="store_true", default=False,
+        help="Enable Euclidean Alignment datamodule (solo con --loso)"
+    )
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU device ID to use")
     parser.add_argument("--seed", type=int, default=None,
                         help="Random seed value (overrides config if specified)")
@@ -152,11 +155,12 @@ def run():
     args = parse_arguments()
 
     config_path = os.path.join(CONFIG_DIR, f"{args.model}.yaml")
-    with open(config_path, encoding="utf-8") as f:      # ← fix encoding
+    with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     if args.loso:
-        config["dataset_name"] = args.dataset + "_loso"
+        loso_suffix = "_loso_ea" if args.ea else "_loso"
+        config["dataset_name"] = args.dataset + loso_suffix
         config["max_epochs"] = config["max_epochs_loso_hgd"] if args.dataset == "hgd" \
                                 else config["max_epochs_loso"]
         config["model_kwargs"]["warmup_epochs"] = config["model_kwargs"]["warmup_epochs_loso"]

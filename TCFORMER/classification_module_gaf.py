@@ -3,9 +3,18 @@
 ClassificationModule con auxiliary GAF distillation loss.
 
 Modalità supportate (controllate da YAML):
-  A) use_joint_training=False, ae_ckpt_path=<path>  → encoder pretrained + frozen     (vecchio approccio)
-  B) use_joint_training=True,  ae_ckpt_path=<path>  → encoder pretrained + trainabile (pretrained joint)
-  C) use_joint_training=True,  ae_ckpt_path=null    → encoder random + trainabile     (nuovo approccio)
+  A) use_joint_training=False, ae_ckpt_path=<path>  → encoder pretrained + frozen
+  B) use_joint_training=True,  ae_ckpt_path=<path>  → encoder pretrained + trainabile
+  C) use_joint_training=True,  ae_ckpt_path=null    → encoder random + trainabile
+
+Regularization:
+  - L2: tramite weight_decay nell'ottimizzatore
+  - L1: tramite l1_lambda sulla loss
+  - Elastic Net: L1 + L2 insieme
+
+Lambda schedule:
+  - lambda_aux parte alto → GAFEncoder si stabilizza nelle prime epoch
+  - lambda_aux scende verso lambda_aux_final → TCFormer si concentra sulla classificazione
 """
 import random
 from pathlib import Path
@@ -70,36 +79,26 @@ class GAFLatentExtractor(nn.Module):
         in_channels = 2 if gaf_mode == "both" else 1
 
         if ae_ckpt_path is not None:
-            # Modalità A o B: carica encoder dal checkpoint
             ae = GAFAutoencoder.load_from_checkpoint(ae_ckpt_path)
             self.encoder = ae.encoder
             print(f"[GAFLatentExtractor] Loaded encoder from: {ae_ckpt_path}")
         else:
-            # Modalità C: encoder inizializzato da zero
             self.encoder = GAFEncoder(in_channels=in_channels, latent_dim=latent_dim)
             print(f"[GAFLatentExtractor] Random init encoder (joint training from scratch)")
 
         self.latent_dim = self.encoder.latent_dim
 
         if not use_joint_training:
-            # Modalità A: frozen
             for p in self.encoder.parameters():
                 p.requires_grad_(False)
             self.encoder.eval()
             print(f"[GAFLatentExtractor] Encoder frozen")
         else:
-            # Modalità B o C: trainabile
             for p in self.encoder.parameters():
                 p.requires_grad_(True)
             print(f"[GAFLatentExtractor] Encoder trainable (joint training)")
 
     def _compute_gaf_tensor(self, x_raw: torch.Tensor) -> torch.Tensor:
-        """
-        EEG raw → GAF images come tensore.
-        Il passaggio numpy spezza il grafo computazionale sulla trasformazione GAF
-        (corretta: GAF è fissa, non parametrica). I gradienti fluiscono
-        dentro self.encoder a partire dal tensore gaf_t.
-        """
         B, C, T = x_raw.shape
         device = x_raw.device
         x_np = x_raw.detach().cpu().numpy()
@@ -116,21 +115,17 @@ class GAFLatentExtractor(nn.Module):
 
     def forward(self, x_raw: torch.Tensor) -> torch.Tensor:
         B, C, _ = x_raw.shape
-        gaf_t = self._compute_gaf_tensor(x_raw)  # (B*C, in_ch, H, W)
+        gaf_t = self._compute_gaf_tensor(x_raw)
 
         if self.use_joint_training:
-            z = self.encoder(gaf_t)               # gradienti fluiscono
+            z = self.encoder(gaf_t)
         else:
             with torch.no_grad():
-                z = self.encoder(gaf_t)            # frozen, no grad
+                z = self.encoder(gaf_t)
 
-        return z.view(B, C, -1).mean(dim=1)       # (B, latent_dim)
+        return z.view(B, C, -1).mean(dim=1)  # (B, latent_dim)
 
     def train(self, mode: bool = True):
-        """
-        Override: in modalità frozen l'encoder resta sempre in eval
-        anche quando Lightning chiama .train() sul modulo padre.
-        """
         super().train(mode)
         if not self.use_joint_training:
             self.encoder.eval()
@@ -160,13 +155,9 @@ class AuxProjector(nn.Module):
 # --------------------------------------------------------------------------- #
 class ClassificationModuleGAF(pl.LightningModule):
     """
-    L_total = L_cls + lambda_aux * L_aux
-    L_aux   = 1 - cosine_similarity(projector(tcf_features), z_gaf).mean()
+    L_total = L_cls + lambda_aux * L_aux + l1_lambda * L1 + (L2 via weight_decay)
 
-    Configurazione via YAML:
-      ae_ckpt_path: null          # null = random init, path = pretrained
-      use_joint_training: true    # true = encoder trainabile, false = frozen
-      latent_dim: 128             # usato solo se ae_ckpt_path è null
+    Elastic Net = l1_lambda > 0 + weight_decay > 0
     """
     def __init__(
         self,
@@ -178,11 +169,12 @@ class ClassificationModuleGAF(pl.LightningModule):
         latent_dim: int = 128,
         ae_ckpt_path: str = None,
         use_joint_training: bool = True,
-        lambda_aux: float = 0.1,
+        lambda_aux: float = 0.5,
         lambda_aux_final: float = 0.0,
         use_lambda_schedule: bool = True,
+        l1_lambda: float = 0.0,
         lr: float = 0.001,
-        weight_decay: float = 0.0,
+        weight_decay: float = 0.001,
         optimizer: str = "adam",
         scheduler: bool = False,
         max_epochs: int = 1000,
@@ -215,12 +207,21 @@ class ClassificationModuleGAF(pl.LightningModule):
         return features.mean(dim=-1)             # (B, d_tcf)
 
     def _lambda_aux(self) -> float:
+        """
+        Schedule coseno da lambda_aux (alto) → lambda_aux_final (basso).
+        Nelle prime epoch λ è alto → GAFEncoder si stabilizza.
+        Nelle epoch finali λ scende → TCFormer si concentra sulla classificazione.
+        """
         if not self.hparams.use_lambda_schedule:
             return self.hparams.lambda_aux
         progress = self.current_epoch / max(self.hparams.max_epochs - 1, 1)
         return self.hparams.lambda_aux + progress * (
             self.hparams.lambda_aux_final - self.hparams.lambda_aux
         )
+
+    def _l1_loss(self) -> torch.Tensor:
+        """L1 su tutti i parametri trainabili del modello principale."""
+        return sum(p.abs().sum() for p in self.model.parameters())
 
     # ------------------------------------------------------------------ #
     def configure_optimizers(self):
@@ -236,15 +237,15 @@ class ClassificationModuleGAF(pl.LightningModule):
         if self.hparams.optimizer == "adam":
             optimizer = torch.optim.Adam(
                 params, lr=self.hparams.lr, betas=betas,
-                weight_decay=self.hparams.weight_decay)
+                weight_decay=self.hparams.weight_decay)   # L2
         elif self.hparams.optimizer == "adamW":
             optimizer = torch.optim.AdamW(
                 params, lr=self.hparams.lr, betas=betas,
-                weight_decay=self.hparams.weight_decay)
+                weight_decay=self.hparams.weight_decay)   # L2
         elif self.hparams.optimizer == "sgd":
             optimizer = torch.optim.SGD(
                 params, lr=self.hparams.lr,
-                weight_decay=self.hparams.weight_decay)
+                weight_decay=self.hparams.weight_decay)   # L2
         else:
             raise NotImplementedError
 
@@ -286,14 +287,25 @@ class ClassificationModuleGAF(pl.LightningModule):
         l_cls = F.cross_entropy(y_hat, y)
 
         l_aux = torch.tensor(0.0, device=x.device)
+        l_l1  = torch.tensor(0.0, device=x.device)
+
         if mode == "train":
-            tcf_feat = self._get_features(x)        # (B, d_tcf)
-            z_proj   = self.aux_projector(tcf_feat)  # (B, latent_dim)
-            z_gaf    = self.gaf_extractor(x)         # (B, latent_dim)
+            # --- auxiliary GAF loss ---
+            tcf_feat = self._get_features(x)
+            z_proj   = self.aux_projector(tcf_feat)
+            z_gaf    = self.gaf_extractor(x)
             l_aux    = 1.0 - F.cosine_similarity(z_proj, z_gaf, dim=-1).mean()
 
+            # --- L1 regularization ---
+            if self.hparams.l1_lambda > 0:
+                l_l1 = self._l1_loss()
+
         lam  = self._lambda_aux() if mode == "train" else 0.0
-        loss = l_cls + lam * l_aux
+        loss = (
+            l_cls
+            + lam * l_aux                           # auxiliary GAF
+            + self.hparams.l1_lambda * l_l1         # L1 (Elastic Net con weight_decay)
+        )
 
         acc = accuracy(y_hat, y, task="multiclass",
                        num_classes=self.hparams.n_classes)
@@ -302,8 +314,9 @@ class ClassificationModuleGAF(pl.LightningModule):
         self.log(f"{mode}_acc",  acc,  prog_bar=True,  on_step=False, on_epoch=True)
 
         if mode == "train":
-            self.log("aux_loss",   l_aux, prog_bar=False, on_step=False, on_epoch=True)
-            self.log("lambda_aux", lam,   prog_bar=False, on_step=False, on_epoch=True)
+            self.log("aux_loss",   l_aux,                      prog_bar=False, on_step=False, on_epoch=True)
+            self.log("l1_loss",    l_l1,                       prog_bar=False, on_step=False, on_epoch=True)
+            self.log("lambda_aux", lam,                        prog_bar=False, on_step=False, on_epoch=True)
 
         if mode == "test":
             preds = torch.argmax(y_hat, dim=-1)

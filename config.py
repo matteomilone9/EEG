@@ -94,6 +94,12 @@ CFG = {
     #         (confrontabile con la letteratura, ma con data leakage implicito)
     'split_train': False,
     'split_train_ratio': 0.8,  # percentuale usata per train (resto = val)
+    # ── Contrastive Distillation ──────────────────────────────
+    'use_contrastive_distill': True,   # attiva/disattiva
+    'distill_dim':             128,    # dimensione spazio proiettato
+    'distill_temperature':     0.07,   # temperatura InfoNCE
+    'distill_symmetric':       True,   # loss EEG→GAF + GAF→EEG
+    'lambda_distill':          0.3,    # peso della distillation loss
 }
 
 CFG['timepoints'] = int(CFG['sfreq'] * (CFG['tmax'] - CFG['tmin']))

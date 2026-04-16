@@ -125,9 +125,10 @@ class MultiKernelConvBlock(nn.Module):
             x = self.channel_reduction_2(x)
         x = self.temporal_conv_2(x)
         if self.use_group_attn:
-            xs = x.squeeze(2)
+            # x: (B, C, 1, T) dopo pool1 — squeeze forzato sulla dim 2
+            xs = x.view(x.size(0), x.size(1), -1)  # (B, C, T) — sicuro qualunque sia la shape
             xs = xs + self.group_attn(xs)
-            x  = xs.unsqueeze(2)
+            x = xs.unsqueeze(2)  # (B, C, 1, T)
         return self.drop2(self.pool2(x)).squeeze(2)
 
 
@@ -312,12 +313,15 @@ class GAFMiniEncoder(nn.Module):
 
     def forward(self, x):
         B, C, H, W = x.shape
+        # ── [FIX] GAF dummy (H==1, W==1) → restituisce zero embedding ──
+        if H <= 1 or W <= 1:
+            dev = x.device
+            out_dim = self.pool_ch[0].out_features
+            return torch.zeros(B, out_dim, device=dev)
         f = self.cnn(x.view(B * C, 1, H, W)).view(B, C, -1)
         return self.pool_ch(f.mean(1))
 
-
 class AuxHead(nn.Module):
-    """Fusione additiva v14/v15 — default."""
     def __init__(self, d_tcf, gaf_dim, n_classes, hidden=64, dropout=0.4):
         super().__init__()
         self.tcf_proj = nn.Sequential(nn.Linear(d_tcf, hidden), nn.LayerNorm(hidden))
@@ -330,7 +334,6 @@ class AuxHead(nn.Module):
 
 
 class GAFCrossAttnHead(nn.Module):
-    """Fusione cross-attention v15 — attivabile con cross_attention=True."""
     def __init__(self, d_tcf, gaf_dim, n_classes, dk=32, hidden=64,
                  dropout=0.4, attn_dropout=0.3):
         super().__init__()
@@ -362,7 +365,9 @@ class GAFCrossAttnHead(nn.Module):
 class TCFormerWithAux(nn.Module):
     def __init__(self, n_channels, n_classes, cfg):
         super().__init__()
-        self.use_gaf  = cfg['use_gaf']
+        self.use_gaf     = cfg['use_gaf']
+        self.use_distill = cfg.get('use_contrastive_distill', False)
+
         self.tcformer = TCFormerModule(
             n_channels=n_channels, n_classes=n_classes,
             F1=cfg['F1'], temp_kernel_lengths=cfg['temp_kernel_lengths'],
@@ -373,10 +378,12 @@ class TCFormerWithAux(nn.Module):
             trans_depth=cfg['trans_depth'], trans_dropout=cfg['trans_dropout'],
             drop_path_max=cfg['drop_path_max'], tcn_depth=cfg['tcn_depth'],
             kernel_length_tcn=cfg['kernel_length_tcn'], dropout_tcn=cfg['dropout_tcn'])
+
+        n_groups = len(cfg['temp_kernel_lengths'])
+        d_tcf    = cfg['d_group'] * (n_groups + 1)
+        gaf_dim  = cfg['gaf_aux_hidden']
+
         if self.use_gaf:
-            n_groups = len(cfg['temp_kernel_lengths'])
-            d_tcf    = cfg['d_group'] * (n_groups + 1)
-            gaf_dim  = cfg['gaf_aux_hidden']
             self.gaf_enc = GAFMiniEncoder(n_channels, gaf_dim, cfg['gaf_aux_dropout'])
             if cfg.get('cross_attention', False):
                 self.aux_head = GAFCrossAttnHead(
@@ -388,9 +395,46 @@ class TCFormerWithAux(nn.Module):
                 self.aux_head = AuxHead(d_tcf, gaf_dim, n_classes,
                                         cfg['gaf_aux_hidden'], cfg['gaf_aux_dropout'])
 
+        # ── [NEW] Projection heads per Contrastive Distillation ──
+        # Attivi quando use_contrastive_distill=True, indipendentemente da use_gaf.
+        # Il GAFMiniEncoder viene sempre istanziato se use_distill=True,
+        # anche quando use_gaf=False — serve come teacher frozen.
+        if self.use_distill:
+            distill_dim = cfg.get('distill_dim', 128)
+            if not self.use_gaf:
+                # GAFEncoder come teacher standalone (non usato in forward classico)
+                self.gaf_enc = GAFMiniEncoder(n_channels, gaf_dim, cfg['gaf_aux_dropout'])
+            # Projection head EEG: d_tcf → distill_dim
+            self.eeg_proj = nn.Sequential(
+                nn.Linear(d_tcf, d_tcf),
+                nn.GELU(),
+                nn.Linear(d_tcf, distill_dim)
+            )
+            # Projection head GAF: gaf_dim → distill_dim
+            self.gaf_proj = nn.Sequential(
+                nn.Linear(gaf_dim, d_tcf),
+                nn.GELU(),
+                nn.Linear(d_tcf, distill_dim)
+            )
+            glorot_zero(self.eeg_proj)
+            glorot_zero(self.gaf_proj)
+
+    def get_distill_embeddings(self, eeg: torch.Tensor, gaf: torch.Tensor):
+        """
+        Restituisce (z_eeg, z_gaf) per la contrastive loss.
+        Chiamato solo durante il training quando use_distill=True.
+        Il GAFEncoder è usato in no_grad → funge da teacher frozen.
+        """
+        feat_eeg        = self.tcformer.get_features(eeg)   # (B, d_tcf, T)
+        feat_eeg_pooled = feat_eeg.mean(-1)                  # (B, d_tcf)
+        z_eeg           = self.eeg_proj(feat_eeg_pooled)     # (B, distill_dim)
+        with torch.no_grad():
+            feat_gaf = self.gaf_enc(gaf)                     # (B, gaf_dim)
+        z_gaf = self.gaf_proj(feat_gaf)                      # (B, distill_dim)
+        return z_eeg, z_gaf
+
     def forward(self, eeg, gaf=None):
         if self.use_gaf and gaf is not None:
-            # Skip GAF encoder se dummy (Fase 1 LOSO: H==1, W==1)
             gaf_is_real = gaf.shape[-1] > 1 and gaf.shape[-2] > 1
             feat        = self.tcformer.get_features(eeg)
             logits_main = self.tcformer.tcn_head(feat)
@@ -403,4 +447,4 @@ class TCFormerWithAux(nn.Module):
 
 
 def build_model(cfg) -> TCFormerWithAux:
-    return TCFormerWithAux(cfg['n_channels'], cfg['n_classes'], cfg)
+    return TCFormerWithAux(cfg['n_classes'], cfg['n_classes'], cfg)

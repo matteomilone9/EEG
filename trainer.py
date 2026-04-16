@@ -11,7 +11,7 @@ from sklearn.metrics import accuracy_score, cohen_kappa_score
 
 from config import _mode_tag
 from augmentation import segment_and_reconstruct, mixup_batch
-
+from losses import ContrastiveDistillLoss
 
 # ── TTA augmentation + evaluate ──────────────────────────────
 
@@ -62,12 +62,16 @@ def evaluate(model: nn.Module, loader, device, cfg):
 def _run_epoch(model, loader, device, cfg, optimizer, train: bool):
     model.train(train)
     tot_loss, preds, trues = 0.0, [], []
-    lam       = cfg['lambda_aux']
-    use_gaf   = cfg['use_gaf']
-    use_mixup = cfg['use_mixup']
+    lam         = cfg['lambda_aux']
+    use_gaf     = cfg['use_gaf']
+    use_mixup   = cfg['use_mixup']
+    use_distill = cfg.get('use_contrastive_distill', False)
 
-    # ── [MOD 1] Label smoothing — riduce overfit su dataset piccoli ──
-    ce = nn.CrossEntropyLoss(label_smoothing=cfg.get('label_smoothing', 0.1))
+    ce          = nn.CrossEntropyLoss(label_smoothing=cfg.get('label_smoothing', 0.1))
+    distill_fn  = ContrastiveDistillLoss(
+        temperature=cfg.get('distill_temperature', 0.07),
+        symmetric=cfg.get('distill_symmetric', True)
+    ) if use_distill else None
 
     with torch.set_grad_enabled(train):
         for b in loader:
@@ -88,29 +92,33 @@ def _run_epoch(model, loader, device, cfg, optimizer, train: bool):
                         n_classes=cfg['n_classes'],
                         mixup_prob=cfg['mixup_prob'],
                         alpha=cfg['mixup_alpha'])
-                    if use_gaf:
-                        logits_m, logits_a = model(eeg, gaf)
-                        loss = -(y_soft * F.log_softmax(logits_m, -1)).sum(-1).mean()
-                        if logits_a is not None:
-                            loss = loss + lam * (-(y_soft * F.log_softmax(logits_a, -1)).sum(-1).mean()
-)
-                    else:
-                        logits_m = model(eeg)
-                        loss = -(y_soft * F.log_softmax(logits_m, -1)).sum(-1).mean()
+                    logits_m = model(eeg, gaf=None)
+                    loss = -(y_soft * F.log_softmax(logits_m, -1)).sum(-1).mean()
                 else:
-                    if use_gaf:
-                        logits_m, logits_a = model(eeg, gaf)
-                        loss = ce(logits_m, y)
-                        if logits_a is not None:
-                            loss = loss + lam * ce(logits_a, y)
-                    else:
-                        logits_m = model(eeg)
-                        loss = ce(logits_m, y)
+                    logits_m = model(eeg, gaf=None)
+                    loss = ce(logits_m, y)
+
+                # ── Contrastive Distillation ──────────────────
+                if use_distill:
+                    # EEG features → projection head
+                    feat_eeg = model.tcformer.get_features(eeg)
+                    feat_eeg_pooled = feat_eeg.mean(-1)          # (B, d_model)
+                    z_eeg = model.eeg_proj(feat_eeg_pooled)      # (B, distill_dim)
+
+                    # GAF features → projection head (teacher)
+                    with torch.no_grad():
+                        feat_gaf = model.gaf_enc(gaf)            # (B, gaf_embed_dim)
+                    z_gaf = model.gaf_proj(feat_gaf)             # (B, distill_dim)
+
+                    loss_distill = distill_fn(z_eeg, z_gaf)
+                    loss = loss + cfg.get('lambda_distill', 0.3) * loss_distill
 
                 loss.backward()
                 optimizer.step()
+
             else:
-                logits_m = model(eeg, gaf=None) if use_gaf else model(eeg)
+                # Inferenza: solo EEG, nessun GAF
+                logits_m = model(eeg, gaf=None)
                 loss     = ce(logits_m, y)
 
             tot_loss += loss.item()
@@ -120,7 +128,6 @@ def _run_epoch(model, loader, device, cfg, optimizer, train: bool):
     acc   = accuracy_score(trues, preds) * 100
     kappa = cohen_kappa_score(trues, preds)
     return tot_loss / max(len(loader), 1), acc, kappa
-
 
 # ── DistillationTrainer ──────────────────────────────────────
 

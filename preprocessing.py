@@ -11,15 +11,10 @@ from pyts.image import GramianAngularField
 from config import CFG
 
 
-def zscore(X: np.ndarray) -> np.ndarray:
-    """
-    Z-score per trial (asse temporale).
-    Ogni trial viene normalizzato indipendentemente → più robusto
-    a shift di ampiezza tra sessioni (problema principale di S02/S06).
-    """
-    mu  = X.mean(axis=-1, keepdims=True)   # (B, C, 1)
-    std = X.std(axis=-1, keepdims=True) + 1e-8
-    return ((X - mu) / std).astype(np.float32)
+def zscore(X):
+    m = X.mean(axis=-1, keepdims=True)
+    s = X.std(axis=-1, keepdims=True) + 1e-8
+    return ((X - m) / s).astype(np.float32)
 
 
 def minmax(X: np.ndarray) -> np.ndarray:

@@ -31,7 +31,7 @@ CFG = {
     'lr': 9e-4,
     'weight_decay': 1e-4,
     'warmup_epochs': 50,
-    'label_smoothing': 0.1,
+    'label_smoothing': 0.0,
     'patience': 500,
     'aug_prob': 0.5,
     # S&R Augmentation
@@ -82,7 +82,7 @@ CFG = {
     'drop_path_max': 0.1,
     'tcn_depth': 2,
     'kernel_length_tcn': 4,
-    'dropout_tcn': 0.5, #0.3
+    'dropout_tcn': 0.3, #0.3
     # GAF AuxHead
     'gaf_aux_hidden': 64,
     'gaf_aux_dropout': 0.4,

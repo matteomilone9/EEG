@@ -29,6 +29,9 @@ CFG = {
     'batch_size': 32,
     'epochs': 1000,
     'lr': 9e-4,
+    'weight_decay': 1e-4,
+    'warmup_epochs': 50,
+    'label_smoothing': 0.1,
     'patience': 500,
     'aug_prob': 0.5,
     # S&R Augmentation
@@ -45,7 +48,7 @@ CFG = {
     # LOSO flag (v14)
     'loso_approach': False,
     # Ablation GAF
-    'use_gaf': True,
+    'use_gaf': False,
     # GAF@INFERENCE
     'gaf_inference': False,
     'gaf_inference_alpha': 0.75,
@@ -54,14 +57,14 @@ CFG = {
     'cross_attn_dk': 32,
     'cross_attn_dropout': 0.3,
     # ── [v16] FINE-TUNING POST-LOSO ──────────────────────────
-    'loso_ft_approach': True,
+    'loso_ft_approach': False,
     'ft_lr': 1e-4,
     'ft_epochs': 300,
     'ft_patience': 100,
     'ft_freeze_backbone': False,
     # ─────────────────────────────────────────────────────────
     # Multi-seed
-    'multi_seed': False,
+    'multi_seed': True,
     'seeds': [42, 123, 456, 789, 1234],
     # TCFormer
     'F1': 16,
@@ -79,12 +82,18 @@ CFG = {
     'drop_path_max': 0.1,
     'tcn_depth': 2,
     'kernel_length_tcn': 4,
-    'dropout_tcn': 0.3,
+    'dropout_tcn': 0.5, #0.3
     # GAF AuxHead
     'gaf_aux_hidden': 64,
     'gaf_aux_dropout': 0.4,
     # Device
     'device': torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+    # ── Split del training set ────────────────────────────────
+    # True  = split interno di T (80/20) → val set pulito, metodologia onesta
+    # False = usa E sia come val che come test → protocollo BCI Competition
+    #         (confrontabile con la letteratura, ma con data leakage implicito)
+    'split_train': False,
+    'split_train_ratio': 0.8,  # percentuale usata per train (resto = val)
 }
 
 CFG['timepoints'] = int(CFG['sfreq'] * (CFG['tmax'] - CFG['tmin']))
@@ -123,8 +132,9 @@ def _mode_tag(cfg: dict) -> str:
         proto = "LOSO"
     else:
         proto = "Within-Subject"
-    xattn = "XAttn=ON" if (cfg['use_gaf'] and cfg.get('cross_attention', False)) else "XAttn=OFF"
-    return f"{base} | {mixup} | {proto} | {xattn}"
+    xattn  = "XAttn=ON" if (cfg['use_gaf'] and cfg.get('cross_attention', False)) else "XAttn=OFF"
+    split  = "SplitTrain" if cfg.get('split_train', True) else "NoSplit(E=val+test)"
+    return f"{base} | {mixup} | {proto} | {xattn} | {split}"
 
 
 # ── Inizializzazione al primo import ─────────────────────────

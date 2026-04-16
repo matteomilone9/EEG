@@ -5,29 +5,48 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, cohen_kappa_score
 
 from config import get_subject_cfg, set_seed, HARD_SUBJECTS
-from preprocessing import load_subject, preprocess_subject, build_loso_cache
+from preprocessing import load_subject, preprocess_subject, build_loso_cache, split_train_val
 from augmentation import MMDataset, make_dummy_gaf
 from model import build_model
 from trainer import DistillationTrainer, FineTuner, evaluate
-
 
 # ── Within-Subject ───────────────────────────────────────────
 
 def run_subject(sub_id, seed=42, verbose=True):
     cfg = get_subject_cfg(sub_id)
+    split_train = cfg.get('split_train', True)
+
     if verbose:
-        print(f"\n{'─'*55}\nSoggetto {sub_id} | seed={seed}\n{'─'*55}")
+        split_tag = "split T 80/20" if split_train else "E=val+test (paper protocol)"
+        print(f"\n{'─'*55}\nSoggetto {sub_id} | seed={seed} | {split_tag}\n{'─'*55}")
+
     X_tr_raw, y_tr, X_te_raw, y_te = load_subject(sub_id, cfg)
     X_tr_t, X_te_t, X_tr_g, X_te_g = preprocess_subject(X_tr_raw, X_te_raw, cfg)
-    tr_ds = MMDataset(X_tr_t, X_tr_g, y_tr, augment=True, aug_prob=cfg['aug_prob'])
-    te_ds = MMDataset(X_te_t, X_te_g, y_te, augment=False, aug_prob=0.0)
+
+    if split_train:
+        # ── Protocollo onesto: val = 20% di T, test = E ──────
+        X_tr_t2, X_tr_g2, y_tr2, X_va_t, X_va_g, y_va = \
+            split_train_val(X_tr_t, X_tr_g, y_tr, cfg['split_train_ratio'])
+
+        tr_ds = MMDataset(X_tr_t2, X_tr_g2, y_tr2, augment=True,  aug_prob=cfg['aug_prob'])
+        va_ds = MMDataset(X_va_t,  X_va_g,  y_va,  augment=False, aug_prob=0.0)
+        te_ds = MMDataset(X_te_t,  X_te_g,  y_te,  augment=False, aug_prob=0.0)
+    else:
+        # ── Protocollo paper: val = E = test ─────────────────
+        tr_ds = MMDataset(X_tr_t, X_tr_g, y_tr, augment=True,  aug_prob=cfg['aug_prob'])
+        va_ds = MMDataset(X_te_t, X_te_g, y_te, augment=False, aug_prob=0.0)
+        te_ds = va_ds   # stesso oggetto — E usato come val e come test
+
     tr_ld = DataLoader(tr_ds, cfg['batch_size'], shuffle=True,  num_workers=0)
+    va_ld = DataLoader(va_ds, cfg['batch_size'], shuffle=False, num_workers=0)
     te_ld = DataLoader(te_ds, cfg['batch_size'], shuffle=False, num_workers=0)
+
     set_seed(seed)
     model   = build_model(cfg)
     trainer = DistillationTrainer(model, cfg)
-    trainer.fit(tr_ld, te_ld, seed=seed)
-    y_true, y_pred = evaluate(trainer.model, te_ld, cfg['device'], cfg)
+    trainer.fit(tr_ld, va_ld, seed=seed)          # early stop su val
+    y_true, y_pred = evaluate(trainer.model, te_ld, cfg['device'], cfg)  # valuta su test
+
     acc   = accuracy_score(y_true, y_pred) * 100
     kappa = cohen_kappa_score(y_true, y_pred)
     if verbose:
@@ -38,27 +57,45 @@ def run_subject(sub_id, seed=42, verbose=True):
 
 def run_subject_multiseed(sub_id):
     cfg = get_subject_cfg(sub_id)
-    seeds = cfg['seeds']
-    print(f"\n{'═'*65}\n[WS] Soggetto {sub_id} | Multi-seed ({len(seeds)} run): {seeds}\n{'═'*65}")
+    seeds       = cfg['seeds']
+    split_train = cfg.get('split_train', True)
+    split_tag   = "split T 80/20" if split_train else "E=val+test"
+
+    print(f"\n{'═'*65}\n[WS] S{sub_id} | Multi-seed ({len(seeds)} run) | {split_tag}\n{'═'*65}")
+
+    # Pre-processa una volta sola
     X_tr_raw, y_tr, X_te_raw, y_te = load_subject(sub_id, cfg)
     X_tr_t, X_te_t, X_tr_g, X_te_g = preprocess_subject(X_tr_raw, X_te_raw, cfg)
-    tr_ds = MMDataset(X_tr_t, X_tr_g, y_tr, augment=True, aug_prob=cfg['aug_prob'])
-    te_ds = MMDataset(X_te_t, X_te_g, y_te, augment=False, aug_prob=0.0)
+
+    if split_train:
+        X_tr_t2, X_tr_g2, y_tr2, X_va_t, X_va_g, y_va = \
+            split_train_val(X_tr_t, X_tr_g, y_tr, cfg['split_train_ratio'])
+        tr_ds = MMDataset(X_tr_t2, X_tr_g2, y_tr2, augment=True,  aug_prob=cfg['aug_prob'])
+        va_ds = MMDataset(X_va_t,  X_va_g,  y_va,  augment=False, aug_prob=0.0)
+        te_ds = MMDataset(X_te_t,  X_te_g,  y_te,  augment=False, aug_prob=0.0)
+    else:
+        tr_ds = MMDataset(X_tr_t, X_tr_g, y_tr, augment=True,  aug_prob=cfg['aug_prob'])
+        va_ds = MMDataset(X_te_t, X_te_g, y_te, augment=False, aug_prob=0.0)
+        te_ds = va_ds
+
     tr_ld = DataLoader(tr_ds, cfg['batch_size'], shuffle=True,  num_workers=0)
+    va_ld = DataLoader(va_ds, cfg['batch_size'], shuffle=False, num_workers=0)
     te_ld = DataLoader(te_ds, cfg['batch_size'], shuffle=False, num_workers=0)
+
     seed_accs, seed_kappas = [], []
     for i, seed in enumerate(seeds):
         print(f"\n ── Seed {i+1}/{len(seeds)}: {seed} ──")
         set_seed(seed)
         model   = build_model(cfg)
         trainer = DistillationTrainer(model, cfg)
-        trainer.fit(tr_ld, te_ld, seed=seed)
+        trainer.fit(tr_ld, va_ld, seed=seed)
         y_true, y_pred = evaluate(trainer.model, te_ld, cfg['device'], cfg)
         acc   = accuracy_score(y_true, y_pred) * 100
         kappa = cohen_kappa_score(y_true, y_pred)
         seed_accs.append(acc); seed_kappas.append(kappa)
         print(f" ✓ seed={seed} → Acc: {acc:.2f}% | Kappa: {kappa:.4f}")
         del model, trainer; torch.cuda.empty_cache()
+
     mean_acc, std_acc = np.mean(seed_accs), np.std(seed_accs)
     mean_k,   std_k   = np.mean(seed_kappas), np.std(seed_kappas)
     print(f"\n 📊 S{sub_id:02d} [WS] → {mean_acc:.2f} ± {std_acc:.2f}% | κ={mean_k:.4f} ± {std_k:.4f}")

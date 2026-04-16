@@ -1,6 +1,7 @@
 # trainer.py — DistillationTrainer, FineTuner, evaluate
 # ============================================================
 
+import math
 import copy
 import numpy as np
 import torch
@@ -64,7 +65,9 @@ def _run_epoch(model, loader, device, cfg, optimizer, train: bool):
     lam       = cfg['lambda_aux']
     use_gaf   = cfg['use_gaf']
     use_mixup = cfg['use_mixup']
-    ce        = nn.CrossEntropyLoss()
+
+    # ── [MOD 1] Label smoothing — riduce overfit su dataset piccoli ──
+    ce = nn.CrossEntropyLoss(label_smoothing=cfg.get('label_smoothing', 0.1))
 
     with torch.set_grad_enabled(train):
         for b in loader:
@@ -89,7 +92,8 @@ def _run_epoch(model, loader, device, cfg, optimizer, train: bool):
                         logits_m, logits_a = model(eeg, gaf)
                         loss = -(y_soft * F.log_softmax(logits_m, -1)).sum(-1).mean()
                         if logits_a is not None:
-                            loss = loss + lam * (-(y_soft * F.log_softmax(logits_a, -1)).sum(-1).mean())
+                            loss = loss + lam * (-(y_soft * F.log_softmax(logits_a, -1)).sum(-1).mean()
+)
                     else:
                         logits_m = model(eeg)
                         loss = -(y_soft * F.log_softmax(logits_m, -1)).sum(-1).mean()
@@ -127,9 +131,25 @@ class DistillationTrainer:
         self.model  = model.to(cfg['device'])
         self.device = cfg['device']
         self.cfg    = cfg
-        self.opt    = torch.optim.Adam(model.parameters(), lr=cfg['lr'])
-        self.sched  = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.opt, T_max=cfg['epochs'], eta_min=1e-5)
+
+        # ── [MOD 2] Weight decay per regolarizzazione L2 ─────
+        self.opt = torch.optim.Adam(
+            model.parameters(),
+            lr=cfg['lr'],
+            weight_decay=cfg.get('weight_decay', 1e-4)
+        )
+
+        # ── [MOD 3] Warmup lineare + cosine decay ────────────
+        warmup_epochs = cfg.get('warmup_epochs', 50)
+        total_epochs  = cfg['epochs']
+
+        def lr_lambda(ep):
+            if ep < warmup_epochs:
+                return (ep + 1) / warmup_epochs           # salita lineare
+            progress = (ep - warmup_epochs) / max(total_epochs - warmup_epochs, 1)
+            return 0.5 * (1.0 + math.cos(math.pi * progress))  # cosine decay
+
+        self.sched      = torch.optim.lr_scheduler.LambdaLR(self.opt, lr_lambda)
         self.best_acc   = 0.0
         self.best_state = None
         self.history    = dict(tr_loss=[], va_loss=[], tr_acc=[], va_acc=[], va_kap=[])
@@ -183,7 +203,7 @@ class FineTuner:
     Parte dai pesi LOSO pre-addestrati.
     Usa lr ridotto, meno epoche, freeze opzionale del backbone.
 
-    ft_freeze_backbone=True → congela conv_block, mix, transformer, reduce.
+    ft_freeze_backbone=True  → congela conv_block, mix, transformer, reduce.
     ft_freeze_backbone=False → fine-tuning completo di tutti i layer.
     """
 
@@ -203,10 +223,26 @@ class FineTuner:
         else:
             print(f" [FT] Fine-tuning COMPLETO — tutti i parametri liberi")
 
-        trainable  = [p for p in model.parameters() if p.requires_grad]
-        self.opt   = torch.optim.Adam(trainable, lr=cfg['ft_lr'])
-        self.sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.opt, T_max=cfg['ft_epochs'], eta_min=cfg['ft_lr'] * 0.01)
+        trainable = [p for p in model.parameters() if p.requires_grad]
+
+        # ── [MOD 2] Weight decay anche nel fine-tuner ────────
+        self.opt = torch.optim.Adam(
+            trainable,
+            lr=cfg['ft_lr'],
+            weight_decay=cfg.get('weight_decay', 1e-4)
+        )
+
+        # ── [MOD 3] Warmup breve (10 ep) + cosine per il FT ──
+        ft_warmup = min(cfg.get('warmup_epochs', 50) // 5, 10)
+        ft_epochs = cfg['ft_epochs']
+
+        def ft_lr_lambda(ep):
+            if ep < ft_warmup:
+                return (ep + 1) / ft_warmup
+            progress = (ep - ft_warmup) / max(ft_epochs - ft_warmup, 1)
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+        self.sched      = torch.optim.lr_scheduler.LambdaLR(self.opt, ft_lr_lambda)
         self.best_acc   = 0.0
         self.best_state = None
 

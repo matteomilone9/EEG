@@ -13,6 +13,7 @@ from config import _mode_tag
 from augmentation import segment_and_reconstruct, mixup_batch
 from losses import ContrastiveDistillLoss
 
+
 # ── TTA augmentation + evaluate ──────────────────────────────
 
 def _tta_augment(x: torch.Tensor) -> torch.Tensor:
@@ -67,8 +68,8 @@ def _run_epoch(model, loader, device, cfg, optimizer, train: bool):
     use_mixup   = cfg['use_mixup']
     use_distill = cfg.get('use_contrastive_distill', False)
 
-    ce          = nn.CrossEntropyLoss(label_smoothing=cfg.get('label_smoothing', 0.1))
-    distill_fn  = ContrastiveDistillLoss(
+    ce         = nn.CrossEntropyLoss(label_smoothing=cfg.get('label_smoothing', 0.1))
+    distill_fn = ContrastiveDistillLoss(
         temperature=cfg.get('distill_temperature', 0.07),
         symmetric=cfg.get('distill_symmetric', True)
     ) if use_distill else None
@@ -99,25 +100,18 @@ def _run_epoch(model, loader, device, cfg, optimizer, train: bool):
                     loss = ce(logits_m, y)
 
                 # ── Contrastive Distillation ──────────────────
+                # Attiva solo se il GAF è reale (non dummy 1×1)
                 if use_distill:
-                    # EEG features → projection head
-                    feat_eeg = model.tcformer.get_features(eeg)
-                    feat_eeg_pooled = feat_eeg.mean(-1)          # (B, d_model)
-                    z_eeg = model.eeg_proj(feat_eeg_pooled)      # (B, distill_dim)
-
-                    # GAF features → projection head (teacher)
-                    with torch.no_grad():
-                        feat_gaf = model.gaf_enc(gaf)            # (B, gaf_embed_dim)
-                    z_gaf = model.gaf_proj(feat_gaf)             # (B, distill_dim)
-
-                    loss_distill = distill_fn(z_eeg, z_gaf)
-                    loss = loss + cfg.get('lambda_distill', 0.3) * loss_distill
+                    gaf_is_real = gaf.shape[-1] > 1 and gaf.shape[-2] > 1
+                    if gaf_is_real:
+                        z_eeg, z_gaf = model.get_distill_embeddings(eeg, gaf)
+                        loss_distill = distill_fn(z_eeg, z_gaf)
+                        loss = loss + cfg.get('lambda_distill', 0.3) * loss_distill
 
                 loss.backward()
                 optimizer.step()
 
             else:
-                # Inferenza: solo EEG, nessun GAF
                 logits_m = model(eeg, gaf=None)
                 loss     = ce(logits_m, y)
 
@@ -129,6 +123,7 @@ def _run_epoch(model, loader, device, cfg, optimizer, train: bool):
     kappa = cohen_kappa_score(trues, preds)
     return tot_loss / max(len(loader), 1), acc, kappa
 
+
 # ── DistillationTrainer ──────────────────────────────────────
 
 class DistillationTrainer:
@@ -139,22 +134,20 @@ class DistillationTrainer:
         self.device = cfg['device']
         self.cfg    = cfg
 
-        # ── [MOD 2] Weight decay per regolarizzazione L2 ─────
         self.opt = torch.optim.Adam(
             model.parameters(),
             lr=cfg['lr'],
             weight_decay=cfg.get('weight_decay', 1e-4)
         )
 
-        # ── [MOD 3] Warmup lineare + cosine decay ────────────
         warmup_epochs = cfg.get('warmup_epochs', 50)
         total_epochs  = cfg['epochs']
 
         def lr_lambda(ep):
             if ep < warmup_epochs:
-                return (ep + 1) / warmup_epochs           # salita lineare
+                return (ep + 1) / warmup_epochs
             progress = (ep - warmup_epochs) / max(total_epochs - warmup_epochs, 1)
-            return 0.5 * (1.0 + math.cos(math.pi * progress))  # cosine decay
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
 
         self.sched      = torch.optim.lr_scheduler.LambdaLR(self.opt, lr_lambda)
         self.best_acc   = 0.0
@@ -232,14 +225,12 @@ class FineTuner:
 
         trainable = [p for p in model.parameters() if p.requires_grad]
 
-        # ── [MOD 2] Weight decay anche nel fine-tuner ────────
         self.opt = torch.optim.Adam(
             trainable,
             lr=cfg['ft_lr'],
             weight_decay=cfg.get('weight_decay', 1e-4)
         )
 
-        # ── [MOD 3] Warmup breve (10 ep) + cosine per il FT ──
         ft_warmup = min(cfg.get('warmup_epochs', 50) // 5, 10)
         ft_epochs = cfg['ft_epochs']
 

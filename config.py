@@ -29,9 +29,6 @@ CFG = {
     'batch_size': 32,
     'epochs': 1000,
     'lr': 9e-4,
-    'weight_decay': 1e-4,
-    'warmup_epochs': 50,
-    'label_smoothing': 0.0,
     'patience': 500,
     'aug_prob': 0.5,
     # S&R Augmentation
@@ -62,9 +59,12 @@ CFG = {
     'ft_epochs': 300,
     'ft_patience': 100,
     'ft_freeze_backbone': False,
+    # SPLIT T/V
+    'split_train': False,
+    'split_train_ratio': 0.8,  # percentuale usata per train (resto = val)
     # ─────────────────────────────────────────────────────────
     # Multi-seed
-    'multi_seed': True,
+    'multi_seed': False,
     'seeds': [42, 123, 456, 789, 1234],
     # TCFormer
     'F1': 16,
@@ -82,24 +82,15 @@ CFG = {
     'drop_path_max': 0.1,
     'tcn_depth': 2,
     'kernel_length_tcn': 4,
-    'dropout_tcn': 0.3, #0.3
+    'label_smoothing': 0.15,
+    'dropout_tcn': 0.3,
+    'warmup_epochs': 50,
+    'weight_decay': 1e-4,
     # GAF AuxHead
     'gaf_aux_hidden': 64,
     'gaf_aux_dropout': 0.4,
     # Device
     'device': torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-    # ── Split del training set ────────────────────────────────
-    # True  = split interno di T (80/20) → val set pulito, metodologia onesta
-    # False = usa E sia come val che come test → protocollo BCI Competition
-    #         (confrontabile con la letteratura, ma con data leakage implicito)
-    'split_train': False,
-    'split_train_ratio': 0.8,  # percentuale usata per train (resto = val)
-    # ── Contrastive Distillation ──────────────────────────────
-    'use_contrastive_distill': True,   # attiva/disattiva
-    'distill_dim':             128,    # dimensione spazio proiettato
-    'distill_temperature':     0.07,   # temperatura InfoNCE
-    'distill_symmetric':       True,   # loss EEG→GAF + GAF→EEG
-    'lambda_distill':          0.3,    # peso della distillation loss
 }
 
 CFG['timepoints'] = int(CFG['sfreq'] * (CFG['tmax'] - CFG['tmin']))

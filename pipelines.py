@@ -5,11 +5,11 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, cohen_kappa_score
 
 from config import get_subject_cfg, set_seed, HARD_SUBJECTS
-from preprocessing import load_subject, preprocess_subject, build_loso_cache, split_train_val
 from augmentation import MMDataset, make_dummy_gaf
 from model import build_model
 from trainer import DistillationTrainer, FineTuner, evaluate
 
+from preprocessing import load_subject, preprocess_subject, build_loso_cache, split_train_val
 # ── Within-Subject ───────────────────────────────────────────
 
 def run_subject(sub_id, seed=42, verbose=True):
@@ -100,7 +100,6 @@ def run_subject_multiseed(sub_id):
     mean_k,   std_k   = np.mean(seed_kappas), np.std(seed_kappas)
     print(f"\n 📊 S{sub_id:02d} [WS] → {mean_acc:.2f} ± {std_acc:.2f}% | κ={mean_k:.4f} ± {std_k:.4f}")
     return mean_acc, std_acc, mean_k, std_k, seed_accs
-
 
 # ── LOSO puro ────────────────────────────────────────────────
 

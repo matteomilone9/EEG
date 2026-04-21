@@ -11,7 +11,6 @@ from sklearn.metrics import accuracy_score, cohen_kappa_score
 
 from config import _mode_tag
 from augmentation import segment_and_reconstruct, mixup_batch
-from losses import ContrastiveDistillLoss
 
 
 # ── TTA augmentation + evaluate ──────────────────────────────
@@ -63,16 +62,12 @@ def evaluate(model: nn.Module, loader, device, cfg):
 def _run_epoch(model, loader, device, cfg, optimizer, train: bool):
     model.train(train)
     tot_loss, preds, trues = 0.0, [], []
-    lam         = cfg['lambda_aux']
-    use_gaf     = cfg['use_gaf']
-    use_mixup   = cfg['use_mixup']
-    use_distill = cfg.get('use_contrastive_distill', False)
+    lam       = cfg['lambda_aux']
+    use_gaf   = cfg['use_gaf']
+    use_mixup = cfg['use_mixup']
 
-    ce         = nn.CrossEntropyLoss(label_smoothing=cfg.get('label_smoothing', 0.1))
-    distill_fn = ContrastiveDistillLoss(
-        temperature=cfg.get('distill_temperature', 0.07),
-        symmetric=cfg.get('distill_symmetric', True)
-    ) if use_distill else None
+    # ── [MOD 1] Label smoothing — riduce overfit su dataset piccoli ──
+    ce = nn.CrossEntropyLoss(label_smoothing=cfg.get('label_smoothing', 0.1))
 
     with torch.set_grad_enabled(train):
         for b in loader:
@@ -93,26 +88,29 @@ def _run_epoch(model, loader, device, cfg, optimizer, train: bool):
                         n_classes=cfg['n_classes'],
                         mixup_prob=cfg['mixup_prob'],
                         alpha=cfg['mixup_alpha'])
-                    logits_m = model(eeg, gaf=None)
-                    loss = -(y_soft * F.log_softmax(logits_m, -1)).sum(-1).mean()
+                    if use_gaf:
+                        logits_m, logits_a = model(eeg, gaf)
+                        loss = -(y_soft * F.log_softmax(logits_m, -1)).sum(-1).mean()
+                        if logits_a is not None:
+                            loss = loss + lam * (-(y_soft * F.log_softmax(logits_a, -1)).sum(-1).mean()
+)
+                    else:
+                        logits_m = model(eeg)
+                        loss = -(y_soft * F.log_softmax(logits_m, -1)).sum(-1).mean()
                 else:
-                    logits_m = model(eeg, gaf=None)
-                    loss = ce(logits_m, y)
-
-                # ── Contrastive Distillation ──────────────────
-                # Attiva solo se il GAF è reale (non dummy 1×1)
-                if use_distill:
-                    gaf_is_real = gaf.shape[-1] > 1 and gaf.shape[-2] > 1
-                    if gaf_is_real:
-                        z_eeg, z_gaf = model.get_distill_embeddings(eeg, gaf)
-                        loss_distill = distill_fn(z_eeg, z_gaf)
-                        loss = loss + cfg.get('lambda_distill', 0.3) * loss_distill
+                    if use_gaf:
+                        logits_m, logits_a = model(eeg, gaf)
+                        loss = ce(logits_m, y)
+                        if logits_a is not None:
+                            loss = loss + lam * ce(logits_a, y)
+                    else:
+                        logits_m = model(eeg)
+                        loss = ce(logits_m, y)
 
                 loss.backward()
                 optimizer.step()
-
             else:
-                logits_m = model(eeg, gaf=None)
+                logits_m = model(eeg, gaf=None) if use_gaf else model(eeg)
                 loss     = ce(logits_m, y)
 
             tot_loss += loss.item()
@@ -134,20 +132,22 @@ class DistillationTrainer:
         self.device = cfg['device']
         self.cfg    = cfg
 
+        # ── [MOD 2] Weight decay per regolarizzazione L2 ─────
         self.opt = torch.optim.Adam(
             model.parameters(),
             lr=cfg['lr'],
             weight_decay=cfg.get('weight_decay', 1e-4)
         )
 
+        # ── [MOD 3] Warmup lineare + cosine decay ────────────
         warmup_epochs = cfg.get('warmup_epochs', 50)
         total_epochs  = cfg['epochs']
 
         def lr_lambda(ep):
             if ep < warmup_epochs:
-                return (ep + 1) / warmup_epochs
+                return (ep + 1) / warmup_epochs           # salita lineare
             progress = (ep - warmup_epochs) / max(total_epochs - warmup_epochs, 1)
-            return 0.5 * (1.0 + math.cos(math.pi * progress))
+            return 0.5 * (1.0 + math.cos(math.pi * progress))  # cosine decay
 
         self.sched      = torch.optim.lr_scheduler.LambdaLR(self.opt, lr_lambda)
         self.best_acc   = 0.0
@@ -225,12 +225,14 @@ class FineTuner:
 
         trainable = [p for p in model.parameters() if p.requires_grad]
 
+        # ── [MOD 2] Weight decay anche nel fine-tuner ────────
         self.opt = torch.optim.Adam(
             trainable,
             lr=cfg['ft_lr'],
             weight_decay=cfg.get('weight_decay', 1e-4)
         )
 
+        # ── [MOD 3] Warmup breve (10 ep) + cosine per il FT ──
         ft_warmup = min(cfg.get('warmup_epochs', 50) // 5, 10)
         ft_epochs = cfg['ft_epochs']
 

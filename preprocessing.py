@@ -11,10 +11,16 @@ from pyts.image import GramianAngularField
 from config import CFG
 
 
-def zscore(X):
+def zscore(X: np.ndarray) -> np.ndarray:
     m = X.mean(axis=-1, keepdims=True)
     s = X.std(axis=-1, keepdims=True) + 1e-8
     return ((X - m) / s).astype(np.float32)
+
+def zscore_per_trial(X: np.ndarray) -> np.ndarray:
+    """Z-score applicato trial per trial, non sull'intero dataset."""
+    mu  = X.mean(axis=-1, keepdims=True)   # (B, C, 1)
+    std = X.std(axis=-1, keepdims=True) + 1e-8
+    return ((X - mu) / std).astype(np.float32)
 
 
 def minmax(X: np.ndarray) -> np.ndarray:

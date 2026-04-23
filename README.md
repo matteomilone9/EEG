@@ -9,7 +9,7 @@
 
 ---
 
-## 📈 Results per Subject
+## 📈 Results per Subject (Baseline)
 
 | Subject | Mean Accuracy (%) | Std Dev | Cohen’s Kappa |
 |---------|------------------|---------|---------------|
@@ -26,3 +26,29 @@
 | **Avg** | **79.69**        | **1.20**| **0.7292**    |
 
 > \* Difficult subjects (CFG override enabled)
+
+---
+
+## 🔬 Distillation Impact
+
+| Sub | Baseline | Distill=ON | Δ     |
+|-----|----------|------------|-------|
+| S01 | 87.08    | 87.78      | +0.70 |
+| S02 | 56.81    | 58.61      | +1.80 |
+| S03 | 96.46    | 96.53      | +0.07 |
+| S04 | 80.76    | 79.51      | −1.25 |
+| S05 | 67.85    | 67.85      | 0.00  |
+| S06 | 60.97    | 61.53      | +0.56 |
+| S07 | 94.10    | 93.33      | −0.77 |
+| S08 | 85.14    | 85.21      | +0.07 |
+| S09 | 88.06    | 87.50      | −0.56 |
+|-----|----------|------------|-------|
+| **Avg** | **79.69** | **79.76** | **+0.07** |
+
+---
+
+## 🧠 Notes
+
+- Distillation provides **marginal overall improvement (+0.07%)**
+- Gains are more evident on **difficult subjects (e.g., S02, S06)**
+- Slight degradation observed on some high-performing subjects (e.g., S04, S07)

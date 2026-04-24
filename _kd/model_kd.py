@@ -241,8 +241,8 @@ class TCNHead(nn.Module):
         self.cls = Conv1dWithConstraint(d, n_classes * n_groups, 1, groups=n_groups, max_norm=0.25)
 
     def forward(self, x):
-        x = self.tcn(x)[..., -1]
-        x = self.cls(x.squeeze(-1))
+        x = self.tcn(x)[..., -1]        # [B, d, T] → [B, d]
+        x = self.cls(x.unsqueeze(-1))   # [B, d] → [B, d, 1] → Conv1d → [B, n_classes*n_groups, 1]
         return x.view(x.size(0), self.ng, self.nc).mean(1)
 
 

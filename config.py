@@ -60,7 +60,7 @@ CFG = {
     'ft_patience': 100,
     'ft_freeze_backbone': False,
     # SPLIT T/V
-    'split_train': False,
+    'split_train': True,
     'split_train_ratio': 0.8,  # percentuale usata per train (resto = val)
     # ─────────────────────────────────────────────────────────
     # Multi-seed

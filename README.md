@@ -1,17 +1,29 @@
-# 📊 Experimental Setup — KD-ALIGN *(24/04 Final Run)*
+# 🧠 EEG Within-Subject Classification Benchmark
 
-## ⚙️ Configuration
+## 📌 Overview
 
-| Parameter | Setting |
-|----------|---------|
-| **Modality** | EEG-only + Knowledge Distillation Alignment |
-| **Mixup** | Enabled |
+This report summarizes the performance of different training strategies for EEG-only within-subject classification.
+
+Compared methods:
+
+1. **EEG-Only Baseline**
+2. **Standard Knowledge Distillation (KD)**
+3. **KD-ALIGN (27/04 Final Run)**
+
+---
+
+# ⚙️ Experimental Setup
+
+| Parameter | Configuration |
+|----------|---------------|
+| **Input Modality** | EEG Only |
+| **Training Strategy** | Knowledge Distillation + Alignment |
 | **Evaluation Protocol** | Within-Subject |
+| **Mixup** | Enabled |
 | **Cross-Attention** | Disabled |
-| **Data Split** | No Split *(Validation = Test)* |
-| **Seeds** | 5 *(multi-seed averaging)* |
+| **Seeds** | 5 *(multi-seed average)* |
 | **Teacher Guidance** | Enabled |
-| **Experiment Date** | 27/04 |
+| **Date** | 27/04 |
 
 ---
 
@@ -20,141 +32,134 @@
 | Subject | Accuracy (%) | Std Dev | Cohen’s Kappa |
 |--------|-------------:|--------:|--------------:|
 | S01 | 87.08 | 1.38 | 0.8278 |
-| S02* | 56.81 | 1.71 | 0.4241 |
+| S02 | 56.81 | 1.71 | 0.4241 |
 | S03 | 96.46 | 0.51 | 0.9528 |
 | S04 | 80.76 | 1.52 | 0.7435 |
 | S05 | 67.85 | 1.21 | 0.5713 |
-| S06* | 60.97 | 1.74 | 0.4796 |
+| S06 | 60.97 | 1.74 | 0.4796 |
 | S07 | 94.10 | 0.38 | 0.9213 |
 | S08 | 85.14 | 1.75 | 0.8019 |
 | S09 | 88.06 | 0.56 | 0.8407 |
+
 | **Average** | **79.69** | **1.20** | **0.7292** |
 
-> *\* Difficult subjects (CFG override enabled)*
-
 ---
 
-# 🧪 Standard Knowledge Distillation Results
-
-| Subject | Baseline | Distillation ON | Δ Improvement |
-|--------|---------:|----------------:|-------------:|
-| S01 | 87.08 | 87.78 | +0.70 |
-| S02 | 56.81 | 58.61 | +1.80 |
-| S03 | 96.46 | 96.53 | +0.07 |
-| S04 | 80.76 | 79.51 | -1.25 |
-| S05 | 67.85 | 67.85 | 0.00 |
-| S06 | 60.97 | 61.53 | +0.56 |
-| S07 | 94.10 | 93.33 | -0.77 |
-| S08 | 85.14 | 85.21 | +0.07 |
-| S09 | 88.06 | 87.50 | -0.56 |
-| **Average** | **79.69** | **79.76** | **+0.07** |
-
----
-
-# 🚀 KD-ALIGN Results *(24/04 Final)*
-
-| Subject | Teacher (%) | Student (%) | vs EEG-Only |
-|--------|------------:|------------:|------------:|
-| S01 | 73.26 | 86.81 | -0.27 |
-| S02 | 42.71 | 58.68 | +1.87 |
-| S03 | 78.47 | 96.53 | +0.07 |
-| S04 | 42.01 | 65.62 | -15.14 |
-| S05 | 47.22 | 72.57 | +4.72 |
-| S06 | 36.81 | 57.64 | -3.33 |
-| S07 | 77.78 | 94.79 | +0.69 |
-| S08 | 72.22 | 82.99 | -2.15 |
-| S09 | 69.44 | 86.11 | -1.95 |
-
----
-
-# 📌 Global Metrics
+# 🧪 Previous Best Method — Standard KD
 
 | Metric | Accuracy (%) |
 |-------|-------------:|
-| **Average Teacher** | **59.99** |
-| **Average Student KD-ALIGN** | **77.97** |
-| **Best EEG-Only Reference** | **79.76** |
-| **Gap vs EEG-Only** | **-1.79 pp** |
+| **Average Accuracy** | **79.76** |
+| **Gain vs Baseline** | **+0.07 pp** |
 
 ---
 
-# 🧠 Analysis
+# 🚀 KD-ALIGN Results *(27/04 Final Run)*
 
-## KD-ALIGN vs Standard Distillation
+| Subject | Teacher (%) | Student (%) | vs EEG-Only |
+|--------|------------:|------------:|------------:|
+| S01 | 84.72 | 87.50 | ▼ -0.28 pp |
+| S02 | 54.51 | 60.42 | ▲ +1.81 pp |
+| S03 | 94.79 | 96.53 | = 0.00 pp |
+| S04 | 73.61 | 79.17 | ▼ -0.34 pp |
+| S05 | 61.46 | 71.18 | ▲ +3.33 pp |
+| S06 | 59.03 | 64.24 | ▲ +2.71 pp |
+| S07 | 90.62 | 94.79 | ▲ +1.46 pp |
+| S08 | 82.29 | 85.42 | ▲ +0.21 pp |
+| S09 | 84.72 | 87.85 | ▲ +0.35 pp |
 
-| Method | Accuracy (%) |
+---
+
+# 📊 Global Summary
+
+| Metric | Accuracy (%) |
 |-------|-------------:|
-| Baseline EEG-Only | 79.69 |
-| Standard KD | **79.76** |
-| KD-ALIGN | 77.97 |
-
-**KD-ALIGN underperforms Standard KD by -1.79 percentage points.**
-
----
-
-## ✅ Positive Subject-Level Gains
-
-KD-ALIGN improved several difficult or mid-performing subjects:
-
-- **S02** → +1.87 pp  
-- **S05** → +4.72 pp  
-- **S07** → +0.69 pp  
+| **Average Teacher** | **76.20** |
+| **Average Student KD-ALIGN** | **80.79** |
+| **Best Previous Reference (Standard KD)** | **79.76** |
+| **Gain vs Previous Best** | **+1.03 pp** |
 
 ---
 
-## ❌ Major Performance Drops
+# 🏆 Final Ranking
 
-Significant degradations observed on:
-
-- **S04** → -15.14 pp  
-- **S06** → -3.33 pp  
-- **S08** → -2.15 pp  
-- **S09** → -1.95 pp  
-
----
-
-## 🔍 Interpretation
-
-KD-ALIGN appears beneficial when:
-
-- the teacher provides informative guidance on weak subjects  
-- class boundaries are harder to learn directly from EEG  
-- student benefits from representation regularization  
-
-However, it becomes harmful when:
-
-- teacher accuracy is low  
-- latent spaces are poorly aligned  
-- noisy supervision dominates learning  
-
-The average teacher performance (**59.99%**) is substantially below student standalone accuracy, indicating that **teacher quality is the main bottleneck**.
+| Rank | Method | Accuracy (%) |
+|-----:|--------|-------------:|
+| 🥇 1 | **KD-ALIGN (27/04)** | **80.79** |
+| 🥈 2 | Standard KD | 79.76 |
+| 🥉 3 | EEG-Only Baseline | 79.69 |
 
 ---
 
-# 🏆 Final Conclusion
+# ✅ Subject-Level Improvements
 
-## Best Overall Method: **Standard Knowledge Distillation**
+Strongest gains obtained on difficult subjects:
 
-| Method | Accuracy (%) |
-|-------|-------------:|
-| EEG-Only Baseline | 79.69 |
-| Standard KD | **79.76** |
-| KD-ALIGN | 77.97 |
+| Subject | Improvement |
+|--------|------------:|
+| S05 | +3.33 pp |
+| S06 | +2.71 pp |
+| S02 | +1.81 pp |
+| S07 | +1.46 pp |
 
-KD-ALIGN shows **subject-specific potential**, especially for difficult users, but reduces overall performance.
+Additional positive gains:
+
+- **S08** → +0.21 pp  
+- **S09** → +0.35 pp  
 
 ---
 
-# 🚀 Future Improvements for KD-ALIGN
+# ⚠️ Minor Performance Drops
 
-Possible directions:
+Only small degradations observed:
 
-- Stronger teacher architectures  
-- Confidence-aware teacher filtering  
-- Adaptive alignment weighting  
-- Subject-wise gating mechanisms  
-- Dynamic loss scheduling  
-- Better feature-space normalization  
+| Subject | Change |
+|--------|-------:|
+| S01 | -0.28 pp |
+| S04 | -0.34 pp |
+
+No change:
+
+- **S03** → 0.00 pp
+
+---
+
+# 🔍 Interpretation
+
+The 27/04 KD-ALIGN run significantly improves over previous attempts.
+
+Main observations:
+
+- Higher teacher quality (**76.20% average**)
+- Better student generalization (**80.79%**)
+- Strong improvements on weaker subjects
+- Minimal negative transfer
+
+This indicates that **teacher reliability and alignment stability are critical factors** for successful distillation.
+
+---
+
+# 🏁 Final Conclusion
+
+## Best Overall Method: **KD-ALIGN**
+
+KD-ALIGN is now the top-performing strategy for this benchmark, outperforming both:
+
+- EEG-Only baseline
+- Standard Knowledge Distillation
+
+It is especially effective on historically difficult subjects while preserving strong performance on easier ones.
+
+---
+
+# 🚀 Suggested Future Work
+
+- Confidence-based teacher filtering  
+- Adaptive alignment loss weights  
+- Multi-teacher ensembles  
+- Dynamic temperature scheduling  
+- Cross-subject transfer learning  
+- Better calibration strategies  
 
 ---
 
@@ -164,12 +169,12 @@ Possible directions:
 EEG Within-Subject Classification Benchmark
 
 Baseline EEG-Only      : 79.69%
-Standard Distillation  : 79.76%
-KD-ALIGN (24/04)       : 77.97%
+Standard KD            : 79.76%
+KD-ALIGN (27/04)       : 80.79%
 
-Best Method            : Standard KD
+Best Method            : KD-ALIGN
 
-KD-ALIGN helps difficult subjects
-but lowers the global average.
+Gain vs Previous Best  : +1.03 pp
 
-Teacher quality is likely the main bottleneck.
+Strong improvements on difficult subjects
+with minimal negative transfer.

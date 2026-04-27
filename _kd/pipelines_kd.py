@@ -1,5 +1,10 @@
 # pipelines_kd.py — Pipeline separata Teacher-Student KD
-# Import aggiornati: augmentation_kd e preprocessing_kd
+# ============================================================
+# Novità:
+#   - SR offline (paper-style) integrata in _build_ws_loaders_kd
+#   - train_student=False skippa lo student senza crash
+#   - train_student=False in KD-Align skippa lo Step 3 senza crash
+#   - student_acc=None gestito nei return quando skippato
 # ============================================================
 
 import os
@@ -10,8 +15,8 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, cohen_kappa_score
 
 from config_kd import get_kd_subject_cfg, set_seed
-from augmentation_kd import MMDataset
-from preprocessing_kd import load_subject, preprocess_subject, split_train_val
+from augmentation_kd import MMDataset, apply_sr_offline
+from preprocessing_kd import load_subject, preprocess_subject, split_train_val, make_gaf
 
 from model_kd import build_teacher_model, build_student_model, build_gaf_proj_head
 from trainer_kd import (
@@ -23,7 +28,64 @@ from trainer_kd import (
 )
 
 
-# ── Helper dataloaders ───────────────────────────────────────
+# ── Helper: SR offline su EEG + GAF mantenendo l'allineamento ────────────────
+
+def _apply_sr_offline_multimodal(X_t, X_g, y, cfg):
+    """
+    Applica SR offline in modo coordinato su EEG e GAF.
+    I trial sintetici di GAF vengono costruiti con gli stessi indici donor
+    usati per EEG — mantiene la corrispondenza (eeg_i, gaf_i, label_i).
+    Se use_gaf=False, X_g è un array dummy e viene semplicemente replicato.
+    """
+    if not cfg.get("use_sr", False) or cfg.get("sr_mode", "offline") != "offline":
+        return X_t, X_g, y
+
+    from augmentation_kd import segment_and_reconstruct_offline
+
+    n_segments = cfg.get("n_segments", 8)
+    multiplier = cfg.get("sr_multiplier", 1)
+    B, C, T    = X_t.shape
+
+    classes = np.unique(y)
+    cls_idx = {c: np.where(y == c)[0] for c in classes}
+    seg_len = T // n_segments
+
+    synth_t, synth_g, synth_y = [], [], []
+    for i in range(B):
+        label_i    = y[i]
+        candidates = cls_idx[label_i]
+        if len(candidates) < n_segments:
+            continue
+        for _ in range(multiplier):
+            donors = np.random.choice(candidates, size=n_segments, replace=True)
+
+            new_t = X_t[i].copy()
+            for seg_idx, donor in enumerate(donors):
+                start = seg_idx * seg_len
+                end   = start + seg_len if seg_idx < n_segments - 1 else T
+                new_t[:, start:end] = X_t[donor, :, start:end]
+            synth_t.append(new_t)
+
+            gaf_donor = donors[n_segments // 2]
+            synth_g.append(X_g[gaf_donor].copy())
+            synth_y.append(label_i)
+
+    if not synth_t:
+        return X_t, X_g, y
+
+    X_t_syn = np.stack(synth_t).astype(np.float32)
+    X_g_syn = np.stack(synth_g).astype(np.float32)
+    y_syn   = np.array(synth_y, dtype=y.dtype)
+
+    X_t_out = np.concatenate([X_t, X_t_syn], axis=0)
+    X_g_out = np.concatenate([X_g, X_g_syn], axis=0)
+    y_out   = np.concatenate([y,   y_syn],    axis=0)
+
+    perm = np.random.permutation(len(y_out))
+    return X_t_out[perm], X_g_out[perm], y_out[perm]
+
+
+# ── Helper dataloaders ────────────────────────────────────────────────────────
 
 def _build_ws_loaders_kd(cfg: dict, sub_id: int):
     X_tr_raw, y_tr, X_te_raw, y_te = load_subject(sub_id, cfg)
@@ -31,17 +93,27 @@ def _build_ws_loaders_kd(cfg: dict, sub_id: int):
 
     split_train = cfg.get("split_train", True)
 
+    sr_tag = ""
+    if cfg.get("use_sr", False) and cfg.get("sr_mode", "offline") == "offline":
+        n_orig = len(y_tr)
+        X_tr_t, X_tr_g, y_tr = _apply_sr_offline_multimodal(X_tr_t, X_tr_g, y_tr, cfg)
+        n_aug  = len(y_tr)
+        sr_tag = f" | SR offline {n_orig}→{n_aug} trial"
+
     if split_train:
         X_tr_t2, X_tr_g2, y_tr2, X_va_t, X_va_g, y_va = split_train_val(
             X_tr_t, X_tr_g, y_tr, cfg["split_train_ratio"]
         )
-        tr_ds = MMDataset(X_tr_t2, X_tr_g2, y_tr2, augment=True, aug_prob=cfg["aug_prob"])
-        va_ds = MMDataset(X_va_t, X_va_g, y_va, augment=False, aug_prob=0.0)
-        te_ds = MMDataset(X_te_t, X_te_g, y_te, augment=False, aug_prob=0.0)
+        tr_ds = MMDataset(X_tr_t2, X_tr_g2, y_tr2, augment=True,  aug_prob=cfg["aug_prob"])
+        va_ds = MMDataset(X_va_t,  X_va_g,  y_va,  augment=False, aug_prob=0.0)
+        te_ds = MMDataset(X_te_t,  X_te_g,  y_te,  augment=False, aug_prob=0.0)
     else:
-        tr_ds = MMDataset(X_tr_t, X_tr_g, y_tr, augment=True, aug_prob=cfg["aug_prob"])
+        tr_ds = MMDataset(X_tr_t, X_tr_g, y_tr, augment=True,  aug_prob=cfg["aug_prob"])
         va_ds = MMDataset(X_te_t, X_te_g, y_te, augment=False, aug_prob=0.0)
         te_ds = va_ds
+
+    if sr_tag:
+        print(f"  [SR]{sr_tag}")
 
     tr_ld = DataLoader(tr_ds, batch_size=cfg["batch_size"], shuffle=True,  num_workers=0)
     va_ld = DataLoader(va_ds, batch_size=cfg["batch_size"], shuffle=False, num_workers=0)
@@ -50,15 +122,15 @@ def _build_ws_loaders_kd(cfg: dict, sub_id: int):
     return tr_ld, va_ld, te_ld
 
 
-# ── Helper metriche ──────────────────────────────────────────
+# ── Helper metriche ───────────────────────────────────────────────────────────
 
 def _compute_metrics(y_true, y_pred):
-    acc = accuracy_score(y_true, y_pred) * 100.0
+    acc   = accuracy_score(y_true, y_pred) * 100.0
     kappa = cohen_kappa_score(y_true, y_pred)
     return acc, kappa
 
 
-# ── Pipeline KD single-seed ──────────────────────────────────
+# ── Pipeline KD single-seed ───────────────────────────────────────────────────
 
 def run_subject_kd(sub_id: int, seed: int = 42, verbose: bool = True):
     cfg = get_kd_subject_cfg(sub_id)
@@ -66,22 +138,25 @@ def run_subject_kd(sub_id: int, seed: int = 42, verbose: bool = True):
 
     if verbose:
         split_tag = "split T 80/20" if split_train else "E=val+test"
+        aug_tag   = []
+        if cfg.get("use_sr",    False): aug_tag.append(f"SR({cfg.get('sr_mode','offline')})")
+        if cfg.get("use_mixup", False): aug_tag.append("Mixup")
+        aug_str = " + ".join(aug_tag) if aug_tag else "no aug"
         print(f"\n{'═'*70}")
-        print(f"[KD] Soggetto {sub_id} | seed={seed} | {split_tag}")
+        print(f"[KD] Soggetto {sub_id} | seed={seed} | {split_tag} | {aug_str}")
         print(f"{'═'*70}")
 
     tr_ld, va_ld, te_ld = _build_ws_loaders_kd(cfg, sub_id)
 
-    # ── Step 1: Teacher ──────────────────────────────────────
+    # ── Step 1: Teacher ───────────────────────────────────────────────────────
     set_seed(seed)
-    teacher = build_teacher_model(cfg)
+    teacher         = build_teacher_model(cfg)
     teacher_trainer = TeacherTrainer(teacher, cfg)
 
     if cfg.get("train_teacher", True):
         if verbose:
-            print("\n[STEP 1] Training teacher cross-modal...")
+            print("\n[STEP 1] Training teacher...")
         teacher_trainer.fit(tr_ld, va_ld, seed=seed)
-
         ckpt = cfg.get("teacher_ckpt_path", None)
         if ckpt:
             torch.save(teacher_trainer.model.state_dict(), ckpt)
@@ -96,39 +171,42 @@ def run_subject_kd(sub_id: int, seed: int = 42, verbose: bool = True):
         if verbose:
             print(f"\n[STEP 1] Teacher caricato da checkpoint: {ckpt}")
 
-    active_teacher = teacher_trainer.model if cfg.get("train_teacher", True) else teacher
-    y_true_t, y_pred_t = evaluate_teacher(active_teacher, te_ld, cfg["device"], cfg)
+    active_teacher             = teacher_trainer.model if cfg.get("train_teacher", True) else teacher
+    y_true_t, y_pred_t         = evaluate_teacher(active_teacher, te_ld, cfg["device"], cfg)
     teacher_acc, teacher_kappa = _compute_metrics(y_true_t, y_pred_t)
 
     if verbose:
         print(f"\n[Teacher] S{sub_id:02d} seed={seed} → Acc: {teacher_acc:.2f}% | Kappa: {teacher_kappa:.4f}")
 
-    # ── Step 2: Student KD ───────────────────────────────────
+    # ── Step 2: Student KD ────────────────────────────────────────────────────
+    if not cfg.get("train_student", True):
+        if verbose:
+            print("\n[STEP 2] Student skippato (train_student=False)")
+            print(f"{'─'*70}")
+        return {
+            "subject":       sub_id,
+            "seed":          seed,
+            "teacher_acc":   teacher_acc,
+            "teacher_kappa": teacher_kappa,
+            "student_acc":   None,
+            "student_kappa": None,
+        }
+
     set_seed(seed)
-    student = build_student_model(cfg)
+    student    = build_student_model(cfg)
     kd_trainer = KDTrainer(active_teacher, student, cfg)
 
-    if cfg.get("train_student", True):
+    if verbose:
+        print("\n[STEP 2] Training student with KD...")
+    kd_trainer.fit(tr_ld, va_ld, seed=seed)
+    ckpt = cfg.get("student_ckpt_path", None)
+    if ckpt:
+        torch.save(kd_trainer.student.state_dict(), ckpt)
         if verbose:
-            print("\n[STEP 2] Training student with KD...")
-        kd_trainer.fit(tr_ld, va_ld, seed=seed)
+            print(f"  [SAVE] Student checkpoint salvato in: {ckpt}")
 
-        ckpt = cfg.get("student_ckpt_path", None)
-        if ckpt:
-            torch.save(kd_trainer.student.state_dict(), ckpt)
-            if verbose:
-                print(f"  [SAVE] Student checkpoint salvato in: {ckpt}")
-    else:
-        ckpt = cfg.get("student_ckpt_path", None)
-        if ckpt is None or not os.path.exists(ckpt):
-            raise FileNotFoundError("train_student=False ma student_ckpt_path non esiste.")
-        student.load_state_dict(torch.load(ckpt, map_location=cfg["device"]))
-        student = student.to(cfg["device"])
-        if verbose:
-            print(f"\n[STEP 2] Student caricato da checkpoint: {ckpt}")
-
-    final_student = kd_trainer.student if cfg.get("train_student", True) else student
-    y_true_s, y_pred_s = evaluate_student(final_student, te_ld, cfg["device"], cfg)
+    final_student              = kd_trainer.student
+    y_true_s, y_pred_s         = evaluate_student(final_student, te_ld, cfg["device"], cfg)
     student_acc, student_kappa = _compute_metrics(y_true_s, y_pred_s)
 
     if verbose:
@@ -137,20 +215,21 @@ def run_subject_kd(sub_id: int, seed: int = 42, verbose: bool = True):
         print(f"{'─'*70}")
 
     return {
-        "subject": sub_id,
-        "seed": seed,
-        "teacher_acc": teacher_acc,
+        "subject":       sub_id,
+        "seed":          seed,
+        "teacher_acc":   teacher_acc,
         "teacher_kappa": teacher_kappa,
-        "student_acc": student_acc,
+        "student_acc":   student_acc,
         "student_kappa": student_kappa,
     }
 
 
-# ── Pipeline KD multi-seed ───────────────────────────────────
+# ── Pipeline KD multi-seed ────────────────────────────────────────────────────
 
 def run_subject_kd_multiseed(sub_id: int):
-    cfg = get_kd_subject_cfg(sub_id)
+    cfg   = get_kd_subject_cfg(sub_id)
     seeds = cfg["seeds"]
+    train_student = cfg.get("train_student", True)
 
     print(f"\n{'═'*70}")
     print(f"[KD] S{sub_id:02d} | Multi-seed ({len(seeds)} run)")
@@ -162,70 +241,83 @@ def run_subject_kd_multiseed(sub_id: int):
     for i, seed in enumerate(seeds):
         print(f"\n── Seed {i+1}/{len(seeds)}: {seed} ──")
         out = run_subject_kd(sub_id, seed=seed, verbose=False)
-
         teacher_accs.append(out["teacher_acc"])
         teacher_kappas.append(out["teacher_kappa"])
-        student_accs.append(out["student_acc"])
-        student_kappas.append(out["student_kappa"])
-
-        print(
-            f"  Teacher: {out['teacher_acc']:.2f}% | κ={out['teacher_kappa']:.4f} || "
-            f"Student KD: {out['student_acc']:.2f}% | κ={out['student_kappa']:.4f}"
-        )
+        if train_student and out["student_acc"] is not None:
+            student_accs.append(out["student_acc"])
+            student_kappas.append(out["student_kappa"])
+        s_str = f"Student KD: {out['student_acc']:.2f}% | κ={out['student_kappa']:.4f}" if out["student_acc"] is not None else "Student: skipped"
+        print(f"  Teacher: {out['teacher_acc']:.2f}% | κ={out['teacher_kappa']:.4f} || {s_str}")
         torch.cuda.empty_cache()
 
-    t_acc_m, t_acc_s = np.mean(teacher_accs), np.std(teacher_accs)
+    t_acc_m, t_acc_s = np.mean(teacher_accs),  np.std(teacher_accs)
     t_k_m,   t_k_s   = np.mean(teacher_kappas), np.std(teacher_kappas)
-    s_acc_m, s_acc_s = np.mean(student_accs), np.std(student_accs)
-    s_k_m,   s_k_s   = np.mean(student_kappas), np.std(student_kappas)
 
     print(f"\n{'─'*70}")
     print(f"[KD] S{sub_id:02d} risultati finali")
-    print(f"  Teacher    → {t_acc_m:.2f} ± {t_acc_s:.2f}% | κ={t_k_m:.4f} ± {t_k_s:.4f}")
-    print(f"  Student KD → {s_acc_m:.2f} ± {s_acc_s:.2f}% | κ={s_k_m:.4f} ± {s_k_s:.4f}")
-    print(f"  Δ mean(Student - Teacher) = {s_acc_m - t_acc_m:+.2f}%")
-    print(f"{'─'*70}")
+    print(f"  Teacher → {t_acc_m:.2f} ± {t_acc_s:.2f}% | κ={t_k_m:.4f} ± {t_k_s:.4f}")
 
-    return {
-        "subject": sub_id,
-        "teacher_acc_mean": t_acc_m, "teacher_acc_std": t_acc_s,
-        "teacher_kappa_mean": t_k_m,  "teacher_kappa_std": t_k_s,
-        "student_acc_mean":  s_acc_m, "student_acc_std":  s_acc_s,
-        "student_kappa_mean": s_k_m,  "student_kappa_std": s_k_s,
-        "teacher_accs": teacher_accs,
-        "student_accs":  student_accs,
+    result = {
+        "subject":            sub_id,
+        "teacher_acc_mean":   t_acc_m, "teacher_acc_std":   t_acc_s,
+        "teacher_kappa_mean": t_k_m,   "teacher_kappa_std": t_k_s,
+        "teacher_accs":       teacher_accs,
     }
 
+    if student_accs:
+        s_acc_m, s_acc_s = np.mean(student_accs),  np.std(student_accs)
+        s_k_m,   s_k_s   = np.mean(student_kappas), np.std(student_kappas)
+        print(f"  Student KD → {s_acc_m:.2f} ± {s_acc_s:.2f}% | κ={s_k_m:.4f} ± {s_k_s:.4f}")
+        print(f"  Δ mean(Student - Teacher) = {s_acc_m - t_acc_m:+.2f}%")
+        result.update({
+            "student_acc_mean":   s_acc_m, "student_acc_std":   s_acc_s,
+            "student_kappa_mean": s_k_m,   "student_kappa_std": s_k_s,
+            "student_accs":       student_accs,
+        })
+    else:
+        result.update({
+            "student_acc_mean": None, "student_acc_std": None,
+            "student_kappa_mean": None, "student_kappa_std": None,
+            "student_accs": [],
+        })
 
-# ── Pipeline KD-Align single-seed ────────────────────────────
+    print(f"{'─'*70}")
+    return result
+
+
+# ── Pipeline KD-Align single-seed ─────────────────────────────────────────────
 
 def run_subject_kd_align(sub_id: int, seed: int = 42, verbose: bool = True):
     """
-    Flusso:
-      Step 1 → TeacherTrainer (use_gaf=True, cross-modal)
-      Step 2 → estrai gaf_encoder dal teacher addestrato
-      Step 3 → KDAlignTrainer (teacher frozen + gaf_encoder frozen + proj_head nuovo)
+    Step 1 → TeacherTrainer (use_gaf=True, cross-modal)
+    Step 2 → estrai gaf_encoder dal teacher addestrato
+    Step 3 → KDAlignTrainer (teacher frozen + gaf_encoder frozen + proj_head nuovo)
+             Skippato se train_student=False.
     Al termine lo student è EEG-only puro: proj_head scartato.
     """
     cfg = get_kd_subject_cfg(sub_id)
-    cfg["use_gaf"] = True   # KD-Align richiede use_gaf=True per il teacher
+    cfg["use_gaf"] = True
 
     split_train = cfg.get("split_train", True)
 
     if verbose:
         split_tag = "split T 80/20" if split_train else "E=val+test"
-        beta = cfg.get("align_beta", 0.3)
-        temp = cfg.get("align_temperature", 0.07)
+        beta  = cfg.get("align_beta",        0.3)
+        temp  = cfg.get("align_temperature", 0.07)
+        aug_tag = []
+        if cfg.get("use_sr",    False): aug_tag.append(f"SR({cfg.get('sr_mode','offline')})")
+        if cfg.get("use_mixup", False): aug_tag.append("Mixup")
+        aug_str = " + ".join(aug_tag) if aug_tag else "no aug"
         print(f"\n{'═'*70}")
-        print(f"[KD-Align] Soggetto {sub_id} | seed={seed} | {split_tag}")
+        print(f"[KD-Align] Soggetto {sub_id} | seed={seed} | {split_tag} | {aug_str}")
         print(f"  align_beta={beta} | align_temperature={temp}")
         print(f"{'═'*70}")
 
     tr_ld, va_ld, te_ld = _build_ws_loaders_kd(cfg, sub_id)
 
-    # ── Step 1: Teacher cross-modal ──────────────────────────
+    # ── Step 1: Teacher cross-modal ───────────────────────────────────────────
     set_seed(seed)
-    teacher = build_teacher_model(cfg)
+    teacher         = build_teacher_model(cfg)
     teacher_trainer = TeacherTrainer(teacher, cfg)
 
     if cfg.get("train_teacher", True):
@@ -241,14 +333,14 @@ def run_subject_kd_align(sub_id: int, seed: int = 42, verbose: bool = True):
         if verbose:
             print(f"\n[STEP 1] Teacher caricato da checkpoint: {ckpt}")
 
-    active_teacher = teacher_trainer.model if cfg.get("train_teacher", True) else teacher
-    y_true_t, y_pred_t = evaluate_teacher(active_teacher, te_ld, cfg["device"], cfg)
+    active_teacher             = teacher_trainer.model if cfg.get("train_teacher", True) else teacher
+    y_true_t, y_pred_t         = evaluate_teacher(active_teacher, te_ld, cfg["device"], cfg)
     teacher_acc, teacher_kappa = _compute_metrics(y_true_t, y_pred_t)
 
     if verbose:
         print(f"\n[Teacher] S{sub_id:02d} seed={seed} → Acc: {teacher_acc:.2f}% | Kappa: {teacher_kappa:.4f}")
 
-    # ── Step 2: Estrai GAF encoder dal teacher ───────────────
+    # ── Step 2: Estrai GAF encoder dal teacher ────────────────────────────────
     if not hasattr(active_teacher, "gaf_encoder"):
         raise RuntimeError(
             "Il teacher non ha gaf_encoder. "
@@ -256,7 +348,20 @@ def run_subject_kd_align(sub_id: int, seed: int = 42, verbose: bool = True):
         )
     gaf_encoder = active_teacher.gaf_encoder
 
-    # ── Step 3: Student con KD + alignment GAF ───────────────
+    # ── Step 3: Student KD-Align ──────────────────────────────────────────────
+    if not cfg.get("train_student", True):
+        if verbose:
+            print("\n[STEP 3] Student KD-Align skippato (train_student=False)")
+            print(f"{'─'*70}")
+        return {
+            "subject":       sub_id,
+            "seed":          seed,
+            "teacher_acc":   teacher_acc,
+            "teacher_kappa": teacher_kappa,
+            "student_acc":   None,
+            "student_kappa": None,
+        }
+
     set_seed(seed)
     student   = build_student_model(cfg)
     proj_head = build_gaf_proj_head(cfg)
@@ -269,27 +374,17 @@ def run_subject_kd_align(sub_id: int, seed: int = 42, verbose: bool = True):
         cfg=cfg,
     )
 
-    if cfg.get("train_student", True):
+    if verbose:
+        print("\n[STEP 3] Training student con KD + GAF alignment...")
+    align_trainer.fit(tr_ld, va_ld, seed=seed)
+    ckpt = cfg.get("student_ckpt_path", None)
+    if ckpt:
+        torch.save(align_trainer.student.state_dict(), ckpt)
         if verbose:
-            print("\n[STEP 3] Training student con KD + GAF alignment...")
-        align_trainer.fit(tr_ld, va_ld, seed=seed)
+            print(f"  [SAVE] Student checkpoint salvato in: {ckpt}")
 
-        ckpt = cfg.get("student_ckpt_path", None)
-        if ckpt:
-            torch.save(align_trainer.student.state_dict(), ckpt)
-            if verbose:
-                print(f"  [SAVE] Student checkpoint salvato in: {ckpt}")
-    else:
-        ckpt = cfg.get("student_ckpt_path", None)
-        if ckpt is None or not os.path.exists(ckpt):
-            raise FileNotFoundError("train_student=False ma student_ckpt_path non esiste.")
-        student.load_state_dict(torch.load(ckpt, map_location=cfg["device"]))
-        student = student.to(cfg["device"])
-        if verbose:
-            print(f"\n[STEP 3] Student caricato da checkpoint: {ckpt}")
-
-    final_student = align_trainer.student if cfg.get("train_student", True) else student
-    y_true_s, y_pred_s = evaluate_student(final_student, te_ld, cfg["device"], cfg)
+    final_student              = align_trainer.student
+    y_true_s, y_pred_s         = evaluate_student(final_student, te_ld, cfg["device"], cfg)
     student_acc, student_kappa = _compute_metrics(y_true_s, y_pred_s)
 
     if verbose:
@@ -298,20 +393,21 @@ def run_subject_kd_align(sub_id: int, seed: int = 42, verbose: bool = True):
         print(f"{'─'*70}")
 
     return {
-        "subject": sub_id,
-        "seed": seed,
-        "teacher_acc": teacher_acc,
+        "subject":       sub_id,
+        "seed":          seed,
+        "teacher_acc":   teacher_acc,
         "teacher_kappa": teacher_kappa,
-        "student_acc": student_acc,
+        "student_acc":   student_acc,
         "student_kappa": student_kappa,
     }
 
 
-# ── Pipeline KD-Align multi-seed ─────────────────────────────
+# ── Pipeline KD-Align multi-seed ──────────────────────────────────────────────
 
 def run_subject_kd_align_multiseed(sub_id: int):
-    cfg = get_kd_subject_cfg(sub_id)
+    cfg   = get_kd_subject_cfg(sub_id)
     seeds = cfg["seeds"]
+    train_student = cfg.get("train_student", True)
 
     print(f"\n{'═'*70}")
     print(f"[KD-Align] S{sub_id:02d} | Multi-seed ({len(seeds)} run)")
@@ -323,36 +419,45 @@ def run_subject_kd_align_multiseed(sub_id: int):
     for i, seed in enumerate(seeds):
         print(f"\n── Seed {i+1}/{len(seeds)}: {seed} ──")
         out = run_subject_kd_align(sub_id, seed=seed, verbose=False)
-
         teacher_accs.append(out["teacher_acc"])
         teacher_kappas.append(out["teacher_kappa"])
-        student_accs.append(out["student_acc"])
-        student_kappas.append(out["student_kappa"])
-
-        print(
-            f"  Teacher: {out['teacher_acc']:.2f}% | κ={out['teacher_kappa']:.4f} || "
-            f"Student KD-Align: {out['student_acc']:.2f}% | κ={out['student_kappa']:.4f}"
-        )
+        if train_student and out["student_acc"] is not None:
+            student_accs.append(out["student_acc"])
+            student_kappas.append(out["student_kappa"])
+        s_str = f"Student KD-Align: {out['student_acc']:.2f}% | κ={out['student_kappa']:.4f}" if out["student_acc"] is not None else "Student: skipped"
+        print(f"  Teacher: {out['teacher_acc']:.2f}% | κ={out['teacher_kappa']:.4f} || {s_str}")
         torch.cuda.empty_cache()
 
-    t_acc_m, t_acc_s = np.mean(teacher_accs), np.std(teacher_accs)
+    t_acc_m, t_acc_s = np.mean(teacher_accs),  np.std(teacher_accs)
     t_k_m,   t_k_s   = np.mean(teacher_kappas), np.std(teacher_kappas)
-    s_acc_m, s_acc_s = np.mean(student_accs), np.std(student_accs)
-    s_k_m,   s_k_s   = np.mean(student_kappas), np.std(student_kappas)
 
     print(f"\n{'─'*70}")
     print(f"[KD-Align] S{sub_id:02d} risultati finali")
-    print(f"  Teacher        → {t_acc_m:.2f} ± {t_acc_s:.2f}% | κ={t_k_m:.4f} ± {t_k_s:.4f}")
-    print(f"  Student Align  → {s_acc_m:.2f} ± {s_acc_s:.2f}% | κ={s_k_m:.4f} ± {s_k_s:.4f}")
-    print(f"  Δ mean(Student - Teacher) = {s_acc_m - t_acc_m:+.2f}%")
-    print(f"{'─'*70}")
+    print(f"  Teacher → {t_acc_m:.2f} ± {t_acc_s:.2f}% | κ={t_k_m:.4f} ± {t_k_s:.4f}")
 
-    return {
-        "subject": sub_id,
-        "teacher_acc_mean": t_acc_m, "teacher_acc_std": t_acc_s,
-        "teacher_kappa_mean": t_k_m,  "teacher_kappa_std": t_k_s,
-        "student_acc_mean":  s_acc_m, "student_acc_std":  s_acc_s,
-        "student_kappa_mean": s_k_m,  "student_kappa_std": s_k_s,
-        "teacher_accs": teacher_accs,
-        "student_accs":  student_accs,
+    result = {
+        "subject":            sub_id,
+        "teacher_acc_mean":   t_acc_m, "teacher_acc_std":   t_acc_s,
+        "teacher_kappa_mean": t_k_m,   "teacher_kappa_std": t_k_s,
+        "teacher_accs":       teacher_accs,
     }
+
+    if student_accs:
+        s_acc_m, s_acc_s = np.mean(student_accs),  np.std(student_accs)
+        s_k_m,   s_k_s   = np.mean(student_kappas), np.std(student_kappas)
+        print(f"  Student Align → {s_acc_m:.2f} ± {s_acc_s:.2f}% | κ={s_k_m:.4f} ± {s_k_s:.4f}")
+        print(f"  Δ mean(Student - Teacher) = {s_acc_m - t_acc_m:+.2f}%")
+        result.update({
+            "student_acc_mean":   s_acc_m, "student_acc_std":   s_acc_s,
+            "student_kappa_mean": s_k_m,   "student_kappa_std": s_k_s,
+            "student_accs":       student_accs,
+        })
+    else:
+        result.update({
+            "student_acc_mean": None, "student_acc_std": None,
+            "student_kappa_mean": None, "student_kappa_std": None,
+            "student_accs": [],
+        })
+
+    print(f"{'─'*70}")
+    return result

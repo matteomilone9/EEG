@@ -9,158 +9,165 @@ import torch
 
 warnings.filterwarnings('ignore')
 
-HARD_SUBJECTS_KD = {2, 6}
+HARD_SUBJECTS_KD = {}
 
 KD_CFG = {
     # ============================================================
     # Dataset
     # ============================================================
-    "n_subjects": 9,
-    "sfreq": 250,
-    "lowcut": 4.0,
-    "highcut": 38.0,
-    "tmin": 0.0,
-    "tmax": 4.0,
-    "n_channels": 22,
-    "n_classes": 4,
+    "n_subjects":   9,
+    "sfreq":        250,
+    "lowcut":       4.0,
+    "highcut":      38.0,
+    "tmin":         0.0,
+    "tmax":         4.0,
+    "n_channels":   22,
+    "n_classes":    4,
 
     # ============================================================
     # GAF
     # ============================================================
-    "image_size": 64,
-    "gaf_method": "summation",
-    "downsample_to": 128,
+    "image_size":       64,
+    "gaf_method":       "summation",
+    "downsample_to":    128,
 
     # Backbone GAF: "cnn" oppure "vit"
-    "gaf_backbone_type": "vit",
-    "gaf_image_size": 224,
-    "vit_model_name": "vit_tiny_patch16_224.augreg_in21k_ft_in1k",
-    "vit_pretrained": True,
-    "vit_freeze": True,
+    "gaf_backbone_type":    "vit",
+    "gaf_image_size":       224,
+    "vit_model_name":       "vit_tiny_patch16_224.augreg_in21k_ft_in1k",
+    "vit_pretrained":       True,
+    "vit_freeze":           True,
 
     # ============================================================
     # Run control
     # ============================================================
-    "run_all_subjects": True,
-    "subject_ids": list(range(1, 10)),
-    "single_subject": 3,
-    "default_seed": 42,
-    "default_multi_seed": False,
+    "run_all_subjects":     True,
+    "subject_ids":          list(range(1, 10)),
+    "single_subject":       3,
+    "default_seed":         42,
+    "default_multi_seed":   False,
 
     # ============================================================
     # Shared training
     # ============================================================
-    "batch_size": 32,
-    "aug_prob": 0.5,
-    "n_tta": 5,
-    "split_train": False,
-    "split_train_ratio": 0.8,
-    "seeds": [42, 123, 456, 789, 1234],
-    "use_gaf": True,
-    "use_tgasf": True,
-    "kd_threshold": 0.65, #0.5
+    "batch_size":           32,
+    "aug_prob":             0.5,
+    "n_tta":                1,
+    "split_train":          False,
+    "split_train_ratio":    0.8,
+    "seeds":                [42, 123, 456, 789, 1234],
+    "use_gaf":              False,
+    "use_tgasf":            False,
+    "kd_threshold":         0.65,
+
+    # ── Augmentation ──────────────────────────────────────────
+    # SR (Segmentation & Reconstruction) — paper-style
+    "use_sr":           True,           # abilita SR
+    "sr_mode":          "offline",      # "offline" (paper) | "online" (batch)
+    "sr_multiplier":    1,              # offline: quante copie sintetiche/trial (1=×2)
+    "sr_prob":          0.5,            # online only: prob per sample nel batch
+    "n_segments":       8,              # paper usa 8 segmenti
+
+    # Mixup
+    "use_mixup":        True,           # abilita Mixup nel trainer
+    "mixup_prob":       0.5,
+    "mixup_alpha":      0.4,
 
     # ============================================================
     # TEACHER training
     # ============================================================
-    "epochs_teacher": 1000,
-    "lr_teacher": 9e-4,
-    "patience_teacher": 500,
-    "warmup_epochs_teacher": 50,
-    "weight_decay": 1e-4,
-    "teacher_label_smoothing": 0.15,
-
-    "use_mixup": True,
-    "mixup_prob": 0.5,
-    "mixup_alpha": 0.4,
-    "sr_prob": 0.5,
-    "n_segments": 10,
+    "epochs_teacher":           1000,
+    "lr_teacher":               9e-4,
+    "patience_teacher":         500,
+    "warmup_epochs_teacher":    50,
+    "weight_decay":             1e-4,
+    "teacher_label_smoothing":  0.15,
 
     # ============================================================
     # TEACHER architettura
     # ============================================================
-    "teacher_F1": 16,
-    "teacher_temp_kernel_lengths": (20, 32, 64),
-    "teacher_D": 2,
-    "teacher_pool_length_1": 8,
-    "teacher_pool_length_2": 7,
-    "teacher_dropout_conv": 0.3,
-    "teacher_d_group": 16,
-    "teacher_use_group_attn": True,
-    "teacher_q_heads": 4,
-    "teacher_kv_heads": 2,
-    "teacher_trans_depth": 2,
-    "teacher_trans_dropout": 0.4,
-    "teacher_drop_path_max": 0.1,
-    "teacher_tcn_depth": 2,
-    "teacher_kernel_length_tcn": 4,
-    "teacher_dropout_tcn": 0.3,
+    "teacher_F1":                   16,
+    "teacher_temp_kernel_lengths":  (20, 32, 64),
+    "teacher_D":                    2,
+    "teacher_pool_length_1":        8,
+    "teacher_pool_length_2":        7,
+    "teacher_dropout_conv":         0.3,
+    "teacher_d_group":              16,
+    "teacher_use_group_attn":       True,
+    "teacher_q_heads":              4,
+    "teacher_kv_heads":             2,
+    "teacher_trans_depth":          2,
+    "teacher_trans_dropout":        0.4,
+    "teacher_drop_path_max":        0.1,
+    "teacher_tcn_depth":            2,
+    "teacher_kernel_length_tcn":    4,
+    "teacher_dropout_tcn":          0.3,
 
-    "teacher_gaf_token_dim": 32,  #64
-    "teacher_gaf_base_channels": 16,
-    "teacher_gaf_dropout": 0.4,
-    "teacher_cross_attn_depth": 1, #2
-    "teacher_cross_attn_heads": 4,
-    "teacher_cross_attn_dropout": 0.3,
-    "teacher_ff_mult": 1,  #2
-    "teacher_cls_hidden": 32,  #64
+    "teacher_gaf_token_dim":        32,
+    "teacher_gaf_base_channels":    16,
+    "teacher_gaf_dropout":          0.4,
+    "teacher_cross_attn_depth":     1,
+    "teacher_cross_attn_heads":     4,
+    "teacher_cross_attn_dropout":   0.3,
+    "teacher_ff_mult":              1,
+    "teacher_cls_hidden":           32,
 
     # ============================================================
     # STUDENT training
     # ============================================================
-    "epochs_student": 1000,
-    "lr_student": 9e-4,
-    "patience_student": 500,
-    "warmup_epochs_student": 50,
-    "student_label_smoothing": 0.15,
-    "freeze_teacher": True,
+    "epochs_student":           1000,
+    "lr_student":               9e-4,
+    "patience_student":         500,
+    "warmup_epochs_student":    50,
+    "student_label_smoothing":  0.15,
+    "freeze_teacher":           True,
 
     # ============================================================
     # STUDENT architettura
     # ============================================================
-    "student_F1": 16,
-    "student_temp_kernel_lengths": (20, 32, 64),
-    "student_D": 2,
-    "student_pool_length_1": 8,
-    "student_pool_length_2": 7,
-    "student_dropout_conv": 0.3,
-    "student_d_group": 16,
-    "student_use_group_attn": True,
-    "student_q_heads": 4,
-    "student_kv_heads": 2,
-    "student_trans_depth": 2,
-    "student_trans_dropout": 0.4,
-    "student_drop_path_max": 0.1,
-    "student_tcn_depth": 2,
-    "student_kernel_length_tcn": 4,
-    "student_dropout_tcn": 0.3,
+    "student_F1":                   16,
+    "student_temp_kernel_lengths":  (20, 32, 64),
+    "student_D":                    2,
+    "student_pool_length_1":        8,
+    "student_pool_length_2":        7,
+    "student_dropout_conv":         0.3,
+    "student_d_group":              16,
+    "student_use_group_attn":       True,
+    "student_q_heads":              4,
+    "student_kv_heads":             2,
+    "student_trans_depth":          2,
+    "student_trans_dropout":        0.4,
+    "student_drop_path_max":        0.1,
+    "student_tcn_depth":            2,
+    "student_kernel_length_tcn":    4,
+    "student_dropout_tcn":          0.3,
 
     # ============================================================
     # KD loss
     # ============================================================
-    "kd_alpha": 0.35,  #0.5
-    "kd_temperature": 3.0, #2
+    "kd_alpha":         0.35,
+    "kd_temperature":   3.0,
 
     # ============================================================
     # KD-Align
     # ============================================================
-    "use_kd_align": True,
-    "align_beta": 0.1,  #0.2
-    "align_temperature": 0.10, #.07
+    "use_kd_align":         False,
+    "align_beta":           0.1,
+    "align_temperature":    0.10,
 
     # ============================================================
     # Checkpoint paths
     # ============================================================
-    "train_teacher": True,
-    "train_student": True,
-    "teacher_ckpt_path": None,
-    "student_ckpt_path": None,
+    "train_teacher":        True,
+    "train_student":        False,
+    "teacher_ckpt_path":    None,
+    "student_ckpt_path":    None,
 
     # ============================================================
     # GAF FREQ
     # ============================================================
-    "mu_band": (8, 12),
-    "beta_band": (13, 30),
+    "mu_band":      (8, 12),
+    "beta_band":    (13, 30),
 
     # ============================================================
     # Device
@@ -171,9 +178,9 @@ KD_CFG = {
 KD_CFG["timepoints"] = int(KD_CFG["sfreq"] * (KD_CFG["tmax"] - KD_CFG["tmin"]))
 
 HARD_KD_OVERRIDES = {
-    "aug_prob": 0.7,
-    "sr_prob": 0.7,
-    "mixup_prob": 0.7,
+    "aug_prob":     0.7,
+    "sr_prob":      0.7,
+    "mixup_prob":   0.7,
 }
 
 

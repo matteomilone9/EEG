@@ -1,6 +1,5 @@
 # trainer_kd.py — Trainer separati per Teacher e Student KD
-# Import aggiornati: augmentation_kd invece di augmentation
-# ============================================================
+# ============================================================okok
 
 import math
 import copy
@@ -32,7 +31,7 @@ def evaluate_student(model: nn.Module, loader, device, cfg: dict):
     with torch.no_grad():
         for b in loader:
             eeg = b["eeg"].to(device)
-            y = b["label"].cpu().numpy()
+            y   = b["label"].cpu().numpy()
 
             logits = model(eeg)
             for _ in range(n_tta - 1):
@@ -47,7 +46,7 @@ def evaluate_student(model: nn.Module, loader, device, cfg: dict):
 
 def evaluate_teacher(model: nn.Module, loader, device, cfg: dict):
     model.eval()
-    n_tta = cfg["n_tta"]
+    n_tta   = cfg["n_tta"]
     use_gaf = cfg.get("use_gaf", True)
     preds, trues = [], []
 
@@ -55,7 +54,7 @@ def evaluate_teacher(model: nn.Module, loader, device, cfg: dict):
         for b in loader:
             eeg = b["eeg"].to(device)
             gaf = b["gaf"].to(device) if use_gaf else None
-            y = b["label"].cpu().numpy()
+            y   = b["label"].cpu().numpy()
 
             logits, _ = model(eeg, gaf)
             for _ in range(n_tta - 1):
@@ -77,7 +76,7 @@ def kd_loss(student_logits, teacher_logits, labels,
     loss_ce = ce(student_logits, labels)
 
     student_log_probs = F.log_softmax(student_logits / temperature, dim=-1)
-    teacher_probs = F.softmax(teacher_logits / temperature, dim=-1)
+    teacher_probs     = F.softmax(teacher_logits / temperature, dim=-1)
 
     loss_kd = F.kl_div(
         student_log_probs,
@@ -89,11 +88,34 @@ def kd_loss(student_logits, teacher_logits, labels,
     return loss, loss_ce.detach(), loss_kd.detach()
 
 
+# ── SR online helper ─────────────────────────────────────────
+
+def _maybe_sr_online(eeg, y, cfg):
+    if cfg.get("use_sr", False) and cfg.get("sr_mode", "offline") == "online":
+        return segment_and_reconstruct(
+            eeg, y,
+            n_segments=cfg.get("n_segments", 8),
+            sr_prob=cfg.get("sr_prob", 0.5),
+        )
+    return eeg
+
+
+def _maybe_mixup(eeg, y, cfg):
+    if cfg.get("use_mixup", False):
+        return mixup_batch(
+            eeg, y,
+            n_classes=cfg["n_classes"],
+            mixup_prob=cfg.get("mixup_prob", 0.5),
+            alpha=cfg.get("mixup_alpha", 0.4),
+        )
+    return eeg, None
+
+
 # ── Teacher epoch loop ───────────────────────────────────────
 
 def _run_teacher_epoch(model, loader, device, cfg, optimizer=None, train=True):
     model.train(train)
-    use_gaf = cfg.get("use_gaf", True)
+    use_gaf  = cfg.get("use_gaf", True)
     tot_loss = 0.0
     preds, trues = [], []
 
@@ -103,27 +125,20 @@ def _run_teacher_epoch(model, loader, device, cfg, optimizer=None, train=True):
         for b in loader:
             eeg = b["eeg"].to(device)
             gaf = b["gaf"].to(device) if use_gaf else None
-            y = b["label"].to(device)
+            y   = b["label"].to(device)
 
             if train:
-                eeg = segment_and_reconstruct(
-                    eeg, y,
-                    n_segments=cfg["n_segments"],
-                    sr_prob=cfg["sr_prob"],
-                )
+                eeg = _maybe_sr_online(eeg, y, cfg)
+                eeg, y_soft = _maybe_mixup(eeg, y, cfg)  # Mixup solo in train
                 optimizer.zero_grad()
+            else:
+                y_soft = None  # FIX: no Mixup in validation
 
-            if cfg["use_mixup"]:
-                eeg, y_soft = mixup_batch(
-                    eeg, y,
-                    n_classes=cfg["n_classes"],
-                    mixup_prob=cfg["mixup_prob"],
-                    alpha=cfg["mixup_alpha"],
-                )
-                logits, _ = model(eeg, gaf)
+            logits, _ = model(eeg, gaf)
+
+            if y_soft is not None:
                 loss = -(y_soft * F.log_softmax(logits, -1)).sum(-1).mean()
             else:
-                logits, _ = model(eeg, gaf)
                 loss = ce(logits, y)
 
             if train:
@@ -134,7 +149,7 @@ def _run_teacher_epoch(model, loader, device, cfg, optimizer=None, train=True):
             preds.extend(logits.argmax(-1).detach().cpu().numpy())
             trues.extend(y.detach().cpu().numpy())
 
-    acc = accuracy_score(trues, preds) * 100.0
+    acc   = accuracy_score(trues, preds) * 100.0
     kappa = cohen_kappa_score(trues, preds)
     return tot_loss / max(len(loader), 1), acc, kappa
 
@@ -145,7 +160,7 @@ def _run_student_kd_epoch(student, teacher, loader, device, cfg,
                           optimizer=None, train=True):
     student.train(train)
     teacher.eval()
-    use_gaf = cfg.get("use_gaf", True)
+    use_gaf  = cfg.get("use_gaf", True)
     tot_loss = tot_ce = tot_kd = 0.0
     preds, trues = [], []
 
@@ -153,42 +168,51 @@ def _run_student_kd_epoch(student, teacher, loader, device, cfg,
         for b in loader:
             eeg = b["eeg"].to(device)
             gaf = b["gaf"].to(device) if use_gaf else None
-            y = b["label"].to(device)
+            y   = b["label"].to(device)
 
             if train:
-                eeg = segment_and_reconstruct(
-                    eeg, y,
-                    n_segments=cfg["n_segments"],
-                    sr_prob=cfg["sr_prob"],
-                )
+                eeg = _maybe_sr_online(eeg, y, cfg)
+                eeg_mixed, y_soft = _maybe_mixup(eeg, y, cfg)  # Mixup solo in train
                 optimizer.zero_grad()
+            else:
+                eeg_mixed = eeg
+                y_soft    = None  # FIX: no Mixup in validation
 
             with torch.no_grad():
-                teacher_logits, _ = teacher(eeg, gaf)
+                teacher_logits, _ = teacher(eeg_mixed, gaf)
 
-            student_logits = student(eeg)
+            student_logits = student(eeg_mixed)
 
-            loss, loss_ce, loss_kd = kd_loss(
-                student_logits=student_logits,
-                teacher_logits=teacher_logits,
-                labels=y,
-                alpha=cfg["kd_alpha"],
-                temperature=cfg["kd_temperature"],
-                label_smoothing=cfg["student_label_smoothing"],
-            )
+            if y_soft is not None:
+                loss_ce_soft = -(y_soft * F.log_softmax(student_logits, -1)).sum(-1).mean()
+                student_lp   = F.log_softmax(student_logits / cfg["kd_temperature"], dim=-1)
+                teacher_p    = F.softmax(teacher_logits  / cfg["kd_temperature"], dim=-1)
+                loss_kd_val  = F.kl_div(student_lp, teacher_p, reduction="batchmean") * (cfg["kd_temperature"] ** 2)
+                loss         = cfg["kd_alpha"] * loss_ce_soft + (1.0 - cfg["kd_alpha"]) * loss_kd_val
+                loss_ce_log  = loss_ce_soft.detach()
+                loss_kd_log  = loss_kd_val.detach()
+            else:
+                loss, loss_ce_log, loss_kd_log = kd_loss(
+                    student_logits=student_logits,
+                    teacher_logits=teacher_logits,
+                    labels=y,
+                    alpha=cfg["kd_alpha"],
+                    temperature=cfg["kd_temperature"],
+                    label_smoothing=cfg["student_label_smoothing"],
+                )
 
             if train:
                 loss.backward()
                 optimizer.step()
 
             tot_loss += loss.item()
-            tot_ce += float(loss_ce)
-            tot_kd += float(loss_kd)
+            tot_ce   += float(loss_ce_log)
+            tot_kd   += float(loss_kd_log)
             preds.extend(student_logits.argmax(-1).detach().cpu().numpy())
             trues.extend(y.detach().cpu().numpy())
 
-    n = max(len(loader), 1)
-    acc = accuracy_score(trues, preds) * 100.0
+    n     = max(len(loader), 1)
+    acc   = accuracy_score(trues, preds) * 100.0
     kappa = cohen_kappa_score(trues, preds)
     return tot_loss / n, tot_ce / n, tot_kd / n, acc, kappa
 
@@ -206,31 +230,30 @@ def _run_student_kd_align_epoch(
     teacher.eval()
     gaf_encoder.eval()
 
-    use_gaf = cfg.get("use_gaf", True)
-    beta = cfg.get("align_beta", 0.3)
-    tot_loss = tot_ce = tot_kd = tot_al = tot_alpha = 0.0
+    use_gaf   = cfg.get("use_gaf", True)
+    beta      = cfg.get("align_beta", 0.3)
+    tot_loss  = tot_ce = tot_kd = tot_al = tot_alpha = 0.0
     preds, trues = [], []
 
     with torch.set_grad_enabled(train):
         for b in loader:
             eeg = b["eeg"].to(device)
             gaf = b["gaf"].to(device) if use_gaf else None
-            y = b["label"].to(device)
+            y   = b["label"].to(device)
 
             if train:
-                eeg = segment_and_reconstruct(
-                    eeg, y,
-                    n_segments=cfg["n_segments"],
-                    sr_prob=cfg["sr_prob"],
-                )
+                eeg = _maybe_sr_online(eeg, y, cfg)
+                eeg_mixed, y_soft = _maybe_mixup(eeg, y, cfg)  # Mixup solo in train
                 optimizer.zero_grad()
+            else:
+                eeg_mixed = eeg
+                y_soft    = None  # FIX: no Mixup in validation
 
             with torch.no_grad():
-                teacher_logits, _ = teacher(eeg, gaf)
+                teacher_logits, _ = teacher(eeg_mixed, gaf)
 
-            # Student forward
-            feat = student.get_features(eeg)                    # [B, d_tcf, T]
-            student_logits = student.student.tcn_head(feat)     # unwrap EEGStudentWrapper
+            student_logits = student(eeg_mixed)
+            feat           = student.get_features(eeg_mixed)
 
             loss_kd_total, alpha_mean = adaptive_kd_fn(
                 logits_student=student_logits,
@@ -247,35 +270,35 @@ def _run_student_kd_align_epoch(
             if gaf_is_real:
                 with torch.no_grad():
                     z_gaf = gaf_encoder(gaf).squeeze(1)
-                z_eeg = proj_head(feat)
+                z_eeg   = proj_head(feat)
                 l_align = align_loss_fn(z_eeg, z_gaf)
-                loss = (1.0 - beta) * loss + beta * l_align
+                loss    = (1.0 - beta) * loss + beta * l_align
                 tot_al += float(l_align)
 
             if train:
                 loss.backward()
                 optimizer.step()
 
-            tot_loss += loss.item()
-            tot_ce += float(loss_ce_log)
-            tot_kd += float(loss_kd_total)
+            tot_loss  += loss.item()
+            tot_ce    += float(loss_ce_log)
+            tot_kd    += float(loss_kd_total)
             tot_alpha += float(alpha_mean)
             preds.extend(student_logits.argmax(-1).detach().cpu().numpy())
             trues.extend(y.detach().cpu().numpy())
 
-    n = max(len(loader), 1)
-    acc = accuracy_score(trues, preds) * 100.0
+    n     = max(len(loader), 1)
+    acc   = accuracy_score(trues, preds) * 100.0
     kappa = cohen_kappa_score(trues, preds)
     return tot_loss / n, tot_ce / n, tot_kd / n, tot_al / n, tot_alpha / n, acc, kappa
 
 
-# ── Teacher trainer ──────────────────────────────────────────
+# ── Teacher trainer ───────────────────────────────────────────
 
 class TeacherTrainer:
     def __init__(self, model: nn.Module, cfg: dict):
-        self.model = model.to(cfg["device"])
+        self.model  = model.to(cfg["device"])
         self.device = cfg["device"]
-        self.cfg = cfg
+        self.cfg    = cfg
 
         self.opt = torch.optim.Adam(
             self.model.parameters(),
@@ -284,7 +307,7 @@ class TeacherTrainer:
         )
 
         warmup_epochs = cfg["warmup_epochs_teacher"]
-        total_epochs = cfg["epochs_teacher"]
+        total_epochs  = cfg["epochs_teacher"]
 
         def lr_lambda(ep):
             if ep < warmup_epochs:
@@ -292,18 +315,20 @@ class TeacherTrainer:
             progress = (ep - warmup_epochs) / max(total_epochs - warmup_epochs, 1)
             return 0.5 * (1.0 + math.cos(math.pi * progress))
 
-        self.sched = torch.optim.lr_scheduler.LambdaLR(self.opt, lr_lambda)
-        self.best_acc = 0.0
+        self.sched      = torch.optim.lr_scheduler.LambdaLR(self.opt, lr_lambda)
+        self.best_acc   = 0.0
         self.best_state = None
-        self.history = {"tr_loss": [], "va_loss": [], "tr_acc": [], "va_acc": [], "va_kap": []}
+        self.history    = {"tr_loss": [], "va_loss": [], "tr_acc": [], "va_acc": [], "va_kap": []}
 
     def fit(self, tr_ld, va_ld, seed: int = 42):
         epochs = self.cfg["epochs_teacher"]
-        pat = self.cfg["patience_teacher"]
-        wait = 0
+        pat    = self.cfg["patience_teacher"]
+        wait   = 0
 
+        sr_tag  = f"SR({self.cfg.get('sr_mode','offline')})" if self.cfg.get("use_sr", False) else "no-SR"
+        mix_tag = "Mixup" if self.cfg.get("use_mixup", False) else "no-Mixup"
         print(f"\n{'='*70}")
-        print(f"Teacher training | seed={seed} | epochs={epochs} | patience={pat}")
+        print(f"Teacher training | seed={seed} | epochs={epochs} | patience={pat} | {sr_tag} | {mix_tag}")
         print(f"{'='*70}")
 
         for ep in range(epochs):
@@ -322,13 +347,13 @@ class TeacherTrainer:
                 self.history[k].append(v)
 
             if va_acc > self.best_acc:
-                self.best_acc = va_acc
+                self.best_acc   = va_acc
                 self.best_state = copy.deepcopy(self.model.state_dict())
                 wait = 0
-                tag = " ✨ BEST"
+                tag  = " ✨ BEST"
             else:
                 wait += 1
-                tag = f" [{wait}/{pat}]"
+                tag   = f" [{wait}/{pat}]"
 
             print(
                 f"Teacher {ep+1:03d}/{epochs} | LR {lr:.1e} | "
@@ -347,14 +372,14 @@ class TeacherTrainer:
         return self.history
 
 
-# ── KD trainer ───────────────────────────────────────────────
+# ── KD trainer ────────────────────────────────────────────────
 
 class KDTrainer:
     def __init__(self, teacher: nn.Module, student: nn.Module, cfg: dict):
         self.teacher = teacher.to(cfg["device"])
         self.student = student.to(cfg["device"])
-        self.device = cfg["device"]
-        self.cfg = cfg
+        self.device  = cfg["device"]
+        self.cfg     = cfg
 
         if cfg["freeze_teacher"]:
             for p in self.teacher.parameters():
@@ -367,7 +392,7 @@ class KDTrainer:
         )
 
         warmup_epochs = cfg["warmup_epochs_student"]
-        total_epochs = cfg["epochs_student"]
+        total_epochs  = cfg["epochs_student"]
 
         def lr_lambda(ep):
             if ep < warmup_epochs:
@@ -375,27 +400,30 @@ class KDTrainer:
             progress = (ep - warmup_epochs) / max(total_epochs - warmup_epochs, 1)
             return 0.5 * (1.0 + math.cos(math.pi * progress))
 
-        self.sched = torch.optim.lr_scheduler.LambdaLR(self.opt, lr_lambda)
-        self.best_acc = 0.0
+        self.sched      = torch.optim.lr_scheduler.LambdaLR(self.opt, lr_lambda)
+        self.best_acc   = 0.0
         self.best_state = None
-        self.history = {
+        self.history    = {
             "tr_loss": [], "va_loss": [],
-            "tr_ce": [], "va_ce": [],
-            "tr_kd": [], "va_kd": [],
-            "tr_acc": [], "va_acc": [],
-            "va_kap": [],
+            "tr_ce":   [], "va_ce":   [],
+            "tr_kd":   [], "va_kd":   [],
+            "tr_acc":  [], "va_acc":  [],
+            "va_kap":  [],
         }
 
     def fit(self, tr_ld, va_ld, seed: int = 42):
         epochs = self.cfg["epochs_student"]
-        pat = self.cfg["patience_student"]
-        wait = 0
+        pat    = self.cfg["patience_student"]
+        wait   = 0
 
+        sr_tag  = f"SR({self.cfg.get('sr_mode','offline')})" if self.cfg.get("use_sr", False) else "no-SR"
+        mix_tag = "Mixup" if self.cfg.get("use_mixup", False) else "no-Mixup"
         print(f"\n{'='*70}")
         print(
             f"Student KD training | seed={seed} | "
             f"epochs={epochs} | patience={pat} | "
-            f"alpha={self.cfg['kd_alpha']:.2f} | T={self.cfg['kd_temperature']:.2f}"
+            f"alpha={self.cfg['kd_alpha']:.2f} | T={self.cfg['kd_temperature']:.2f} | "
+            f"{sr_tag} | {mix_tag}"
         )
         print(f"{'='*70}")
 
@@ -416,13 +444,13 @@ class KDTrainer:
                 self.history[k].append(v)
 
             if va_acc > self.best_acc:
-                self.best_acc = va_acc
+                self.best_acc   = va_acc
                 self.best_state = copy.deepcopy(self.student.state_dict())
                 wait = 0
-                tag = " ✨ BEST"
+                tag  = " ✨ BEST"
             else:
                 wait += 1
-                tag = f" [{wait}/{pat}]"
+                tag   = f" [{wait}/{pat}]"
 
             print(
                 f"Student {ep+1:03d}/{epochs} | LR {lr:.1e} | "
@@ -442,29 +470,29 @@ class KDTrainer:
         return self.history
 
 
-# ── KD Align trainer ─────────────────────────────────────────
+# ── KD Align trainer ──────────────────────────────────────────
 
 class KDAlignTrainer:
     def __init__(self, teacher: nn.Module, student: nn.Module,
                  gaf_encoder: nn.Module, proj_head: nn.Module,
                  cfg: dict):
-        self.teacher = teacher.to(cfg["device"])
-        self.student = student.to(cfg["device"])
+        self.teacher     = teacher.to(cfg["device"])
+        self.student     = student.to(cfg["device"])
         self.gaf_encoder = gaf_encoder.to(cfg["device"])
-        self.proj_head = proj_head.to(cfg["device"])
-        self.device = cfg["device"]
-        self.cfg = cfg
+        self.proj_head   = proj_head.to(cfg["device"])
+        self.device      = cfg["device"]
+        self.cfg         = cfg
 
         for p in self.teacher.parameters():
             p.requires_grad = False
         for p in self.gaf_encoder.parameters():
             p.requires_grad = False
 
-        params = list(self.student.parameters()) + list(self.proj_head.parameters())
+        params   = list(self.student.parameters()) + list(self.proj_head.parameters())
         self.opt = torch.optim.Adam(params, lr=cfg["lr_student"], weight_decay=cfg["weight_decay"])
 
         warmup_epochs = cfg["warmup_epochs_student"]
-        total_epochs = cfg["epochs_student"]
+        total_epochs  = cfg["epochs_student"]
 
         def lr_lambda(ep):
             if ep < warmup_epochs:
@@ -484,32 +512,35 @@ class KDAlignTrainer:
             threshold=cfg.get("kd_threshold", 0.5),
         )
 
-        self.best_acc = 0.0
+        self.best_acc   = 0.0
         self.best_state = None
-        self.history = {
+        self.history    = {
             "tr_loss": [], "va_loss": [],
-            "tr_ce": [], "va_ce": [],
-            "tr_kd": [], "va_kd": [],
-            "tr_al": [], "va_al": [],
-            "tr_alpha": [], "va_alpha": [],
-            "tr_acc": [], "va_acc": [],
-            "va_kap": [],
+            "tr_ce":   [], "va_ce":   [],
+            "tr_kd":   [], "va_kd":   [],
+            "tr_al":   [], "va_al":   [],
+            "tr_alpha":[], "va_alpha":[],
+            "tr_acc":  [], "va_acc":  [],
+            "va_kap":  [],
         }
 
     def fit(self, tr_ld, va_ld, seed: int = 42):
-        epochs = self.cfg["epochs_student"]
-        pat = self.cfg["patience_student"]
-        beta = self.cfg.get("align_beta", 0.3)
-        temp = self.cfg.get("align_temperature", 0.07)
-        thr = self.cfg.get("kd_threshold", 0.5)
-        wait = 0
+        epochs  = self.cfg["epochs_student"]
+        pat     = self.cfg["patience_student"]
+        beta    = self.cfg.get("align_beta",        0.3)
+        temp    = self.cfg.get("align_temperature", 0.07)
+        thr     = self.cfg.get("kd_threshold",      0.5)
+        wait    = 0
 
+        sr_tag  = f"SR({self.cfg.get('sr_mode','offline')})" if self.cfg.get("use_sr", False) else "no-SR"
+        mix_tag = "Mixup" if self.cfg.get("use_mixup", False) else "no-Mixup"
         print(f"\n{'='*70}")
         print(
             f"Student KD-Align training | seed={seed} | "
             f"epochs={epochs} | patience={pat} | "
             f"alpha={self.cfg['kd_alpha']:.2f} | T={self.cfg['kd_temperature']:.2f} | "
-            f"beta={beta:.2f} | τ={temp:.3f} | kd_thr={thr:.2f}"
+            f"beta={beta:.2f} | τ={temp:.3f} | kd_thr={thr:.2f} | "
+            f"{sr_tag} | {mix_tag}"
         )
         print(f"{'='*70}")
 
@@ -537,13 +568,13 @@ class KDAlignTrainer:
                 self.history[key].append(val)
 
             if va_acc > self.best_acc:
-                self.best_acc = va_acc
+                self.best_acc   = va_acc
                 self.best_state = copy.deepcopy(self.student.state_dict())
                 wait = 0
-                tag = " ✨ BEST"
+                tag  = " ✨ BEST"
             else:
                 wait += 1
-                tag = f" [{wait}/{pat}]"
+                tag   = f" [{wait}/{pat}]"
 
             print(
                 f"KD-Align {ep+1:03d}/{epochs} | LR {lr:.1e} | "

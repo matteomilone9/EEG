@@ -1,5 +1,4 @@
 # main_kd.py — Entry point separato per esperimenti Teacher-Student KD
-# Import aggiornati: config_kd e pipelines_kd (già self-contained)
 # ============================================================
 
 import argparse
@@ -105,57 +104,68 @@ def main():
     }
 
     if multi_seed:
-        student_means = [r["student_acc_mean"] for r in all_results]
         teacher_means = [r["teacher_acc_mean"] for r in all_results]
+        student_means = [r["student_acc_mean"] for r in all_results if r.get("student_acc_mean") is not None]
 
         print(f"{'Sub':<5} {'Teacher':>18} {'Student':>22} {'vs EEG-Only':>13} {'Std':>8}")
         print("-" * 80)
         for r in all_results:
             s = r["subject"]
-            delta = r["student_acc_mean"] - eeg_only_best.get(s, 0)
-            arrow = "▲" if delta >= 0 else "▼"
-            flag  = " ⚠" if r["student_acc_std"] > 5.0 else ""
+            if r.get("student_acc_mean") is not None:
+                delta = r["student_acc_mean"] - eeg_only_best.get(s, 0)
+                arrow = "▲" if delta >= 0 else "▼"
+                flag  = " ⚠" if r["student_acc_std"] > 5.0 else ""
+                s_str = (
+                    f"Student {r['student_acc_mean']:5.2f}±{r['student_acc_std']:4.2f}% | "
+                    f"{arrow}{abs(delta):5.2f}pp{flag}"
+                )
+            else:
+                s_str = "Student            skipped"
             print(
                 f"S{s:02d} | "
                 f"Teacher {r['teacher_acc_mean']:5.2f}±{r['teacher_acc_std']:4.2f}% | "
-                f"Student {r['student_acc_mean']:5.2f}±{r['student_acc_std']:4.2f}% | "
-                f"{arrow}{abs(delta):5.2f}pp{flag}"
+                f"{s_str}"
             )
 
         print("-" * 80)
-        avg_student = np.mean(student_means)
         avg_teacher = np.mean(teacher_means)
-        avg_eeg     = np.mean(list(eeg_only_best.values()))
         print(f"Media Teacher         : {avg_teacher:.2f}%")
-        print(f"Media Student KD/Align: {avg_student:.2f}%")
-        print(f"Media EEG-Only Best   : {avg_eeg:.2f}%  (riferimento)")
-        print(f"Gap KD/Align vs EEG   : {avg_student - avg_eeg:+.2f}pp")
+        if student_means:
+            avg_student = np.mean(student_means)
+            avg_eeg     = np.mean(list(eeg_only_best.values()))
+            print(f"Media Student KD/Align: {avg_student:.2f}%")
+            print(f"Media EEG-Only Best   : {avg_eeg:.2f}%  (riferimento)")
+            print(f"Gap KD/Align vs EEG   : {avg_student - avg_eeg:+.2f}pp")
+        else:
+            print("Student: skipped per tutti i soggetti")
 
     else:
-        student_accs = [r["student_acc"] for r in all_results]
         teacher_accs = [r["teacher_acc"] for r in all_results]
+        student_accs = [r["student_acc"] for r in all_results if r.get("student_acc") is not None]
 
         print(f"{'Sub':<5} {'Teacher':>14} {'Student':>20} {'vs EEG-Only':>13}")
         print("-" * 80)
         for r in all_results:
             s = r["subject"]
-            delta = r["student_acc"] - eeg_only_best.get(s, 0)
-            arrow = "▲" if delta >= 0 else "▼"
-            print(
-                f"S{s:02d} | "
-                f"Teacher {r['teacher_acc']:5.2f}% | "
-                f"Student {r['student_acc']:5.2f}% | "
-                f"{arrow}{abs(delta):5.2f}pp"
-            )
+            if r.get("student_acc") is not None:
+                delta = r["student_acc"] - eeg_only_best.get(s, 0)
+                arrow = "▲" if delta >= 0 else "▼"
+                s_str = f"Student {r['student_acc']:5.2f}% | {arrow}{abs(delta):5.2f}pp"
+            else:
+                s_str = "Student      skipped"
+            print(f"S{s:02d} | Teacher {r['teacher_acc']:5.2f}% | {s_str}")
 
         print("-" * 80)
-        avg_student = np.mean(student_accs)
         avg_teacher = np.mean(teacher_accs)
-        avg_eeg     = np.mean(list(eeg_only_best.values()))
         print(f"Media Teacher         : {avg_teacher:.2f}%")
-        print(f"Media Student KD/Align: {avg_student:.2f}%")
-        print(f"Media EEG-Only Best   : {avg_eeg:.2f}%  (riferimento)")
-        print(f"Gap KD/Align vs EEG   : {avg_student - avg_eeg:+.2f}pp")
+        if student_accs:
+            avg_student = np.mean(student_accs)
+            avg_eeg     = np.mean(list(eeg_only_best.values()))
+            print(f"Media Student KD/Align: {avg_student:.2f}%")
+            print(f"Media EEG-Only Best   : {avg_eeg:.2f}%  (riferimento)")
+            print(f"Gap KD/Align vs EEG   : {avg_student - avg_eeg:+.2f}pp")
+        else:
+            print("Student: skipped per tutti i soggetti")
 
     print("=" * 80)
 

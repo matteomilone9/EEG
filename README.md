@@ -1,5 +1,12 @@
 # 🧠 EEG Within-Subject Classification Benchmark
 
+
+----------------------------------------------------------------------------
+## "use_gaf":         False,   # era True
+## "use_kd_align":    False,   # era True
+## "train_student":   False,   # era True  ← non addestrare lo student
+----------------------------------------------------------------------------
+
 ## 📌 Overview
 
 This report summarizes the performance of different training strategies for EEG-only within-subject classification.

@@ -28,6 +28,29 @@
 
 > *Difficult subjects (CFG override enabled)*
 
+
+
+
+================================================================================
+RIEPILOGO FINALE
+================================================================================
+Sub          Teacher              Student   vs EEG-Only
+--------------------------------------------------------------------------------
+S01 | Teacher 84.72% | Student 87.50% | ▼ 0.28pp
+S02 | Teacher 54.51% | Student 60.42% | ▲ 1.81pp
+S03 | Teacher 94.79% | Student 96.53% | ▼ 0.00pp
+S04 | Teacher 73.61% | Student 79.17% | ▼ 0.34pp
+S05 | Teacher 61.46% | Student 71.18% | ▲ 3.33pp
+S06 | Teacher 59.03% | Student 64.24% | ▲ 2.71pp
+S07 | Teacher 90.62% | Student 94.79% | ▲ 1.46pp
+S08 | Teacher 82.29% | Student 85.42% | ▲ 0.21pp
+S09 | Teacher 84.72% | Student 87.85% | ▲ 0.35pp
+--------------------------------------------------------------------------------
+Media Teacher         : 76.20%
+Media Student KD/Align: 80.79%
+Media EEG-Only Best   : 79.76%  (riferimento)
+Gap KD/Align vs EEG   : +1.03pp
+
 ---
 
 ## 🔬 Distillation Impact (Previous KD)

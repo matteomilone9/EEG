@@ -7,6 +7,14 @@
 ## "train_student":   False,   # era True  ← non addestrare lo student
 ----------------------------------------------------------------------------
 
+#TODO
+##Togliere bandpass → "lowcut": None, "highcut": None
+
+##Allineare F1 al paper → "teacher_F1": 32, "student_F1": 32
+
+##Allineare trans_depth → "teacher_trans_depth": 5, "student_trans_depth": 5
+#
+
 ## 📌 Overview
 
 This report summarizes the performance of different training strategies for EEG-only within-subject classification.

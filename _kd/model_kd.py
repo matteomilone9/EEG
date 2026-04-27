@@ -1,6 +1,11 @@
 # model_kd.py — Modelli self-contained per pipeline Teacher-Student KD
 # Tutti i building block di model.py sono inclusi qui: nessun import da model.py
 # ============================================================
+# ARCHITETTURA:
+#   Teacher  → TCFormer EEG + GAFTokenEncoder (CNN o ViT) + CrossAttention
+#   Student  → TCFormer EEG-only (riceve KD dal Teacher)
+#   GAFTokenEncoder: "cnn" (default) o "vit" (vit_tiny pretrained, richiede timm)
+# ============================================================
 
 import math
 import torch
@@ -9,7 +14,7 @@ import torch.nn.functional as F
 
 
 # ════════════════════════════════════════════════════════════
-# Utilities (da model.py)
+# Utilities
 # ════════════════════════════════════════════════════════════
 
 def glorot_zero(module):
@@ -87,7 +92,9 @@ class MultiKernelConvBlock(nn.Module):
         self.rearrange = Rearrange("b c seq -> b 1 c seq")
         self.temporal_convs = nn.ModuleList([
             nn.Sequential(
-                nn.ConstantPad2d((k // 2 - 1, k // 2, 0, 0) if k % 2 == 0 else (k // 2, k // 2, 0, 0), 0),
+                nn.ConstantPad2d(
+                    (k // 2 - 1, k // 2, 0, 0) if k % 2 == 0 else (k // 2, k // 2, 0, 0), 0
+                ),
                 nn.Conv2d(1, F1, (1, k), bias=False),
                 nn.BatchNorm2d(F1),
             )
@@ -241,8 +248,8 @@ class TCNHead(nn.Module):
         self.cls = Conv1dWithConstraint(d, n_classes * n_groups, 1, groups=n_groups, max_norm=0.25)
 
     def forward(self, x):
-        x = self.tcn(x)[..., -1]        # [B, d, T] → [B, d]
-        x = self.cls(x.unsqueeze(-1))   # [B, d] → [B, d, 1] → Conv1d → [B, n_classes*n_groups, 1]
+        x = self.tcn(x)[..., -1]
+        x = self.cls(x.unsqueeze(-1))
         return x.view(x.size(0), self.ng, self.nc).mean(1)
 
 
@@ -307,7 +314,7 @@ class TCFormerModule(nn.Module):
 
 
 # ════════════════════════════════════════════════════════════
-# KD-specific classes
+# Helpers
 # ════════════════════════════════════════════════════════════
 
 def _get_n_groups(cfg: dict, prefix: str) -> int:
@@ -318,10 +325,12 @@ def _get_d_model(cfg: dict, prefix: str) -> int:
     return cfg[f"{prefix}_d_group"] * _get_n_groups(cfg, prefix)
 
 
-# ── Student ──────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════
+# Student
+# ════════════════════════════════════════════════════════════
 
 class EEGStudentWrapper(nn.Module):
-    """Wrapper dello student EEG-only basato su TCFormerModule."""
+    """Student EEG-only — riceve KD dal Teacher cross-modal."""
 
     def __init__(self, cfg: dict):
         super().__init__()
@@ -357,60 +366,120 @@ def build_student_model(cfg: dict) -> nn.Module:
     return EEGStudentWrapper(cfg)
 
 
-# ── GAF token encoder ────────────────────────────────────────
+# ════════════════════════════════════════════════════════════
+# GAF Token Encoder  (CNN  o  ViT)
+# ════════════════════════════════════════════════════════════
 
 class GAFTokenEncoder(nn.Module):
-    """Encoder leggero che trasforma GAF in token [B, 1, d_model]."""
+    """
+    Converte le GAF in token [B, 1, token_dim].
 
-    def __init__(self, n_channels: int, token_dim: int = 64,
-                 base_channels: int = 16, dropout: float = 0.3):
+    cfg["gaf_backbone_type"]:
+      "cnn"  →  CNN leggero 3-layer (default)
+      "vit"  →  ViT-Tiny pre-trainato (richiede: pip install timm)
+
+    Shape GAF accettati in input:
+      [B, C, H, W]        →  C canali EEG, ogni canale è una GAF 2D
+      [B, C, N_CH, H, W]  →  C freq-band × N_CH canali EEG
+
+    In entrambi i casi ogni immagine viene processata come [N, 1, H, W]
+    e poi mediata → [B, 1, token_dim].
+    """
+
+    def __init__(self, cfg: dict):
         super().__init__()
-        self.token_dim = token_dim
-        self.cnn = nn.Sequential(
-            nn.Conv2d(1, base_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(base_channels),
-            nn.ELU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(base_channels, base_channels * 2, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(base_channels * 2),
-            nn.ELU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(base_channels * 2, token_dim, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(token_dim),
-            nn.ELU(),
-            nn.AdaptiveAvgPool2d((1, 1)),
-        )
+        self.backbone_type  = cfg.get("gaf_backbone_type", "cnn")
+        self.token_dim      = cfg["teacher_gaf_token_dim"]
+        self.dropout_val    = cfg.get("teacher_gaf_dropout", 0.3)
+        self.gaf_image_size = cfg.get("gaf_image_size", 224)
+
+        if self.backbone_type == "cnn":
+            base_ch = cfg.get("teacher_gaf_base_channels", 16)
+            self.backbone = nn.Sequential(
+                nn.Conv2d(1, base_ch, 3, padding=1, bias=False),
+                nn.BatchNorm2d(base_ch),
+                nn.ELU(),
+                nn.MaxPool2d(2),
+                nn.Conv2d(base_ch, base_ch * 2, 3, padding=1, bias=False),
+                nn.BatchNorm2d(base_ch * 2),
+                nn.ELU(),
+                nn.MaxPool2d(2),
+                nn.Conv2d(base_ch * 2, 128, 3, padding=1, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ELU(),
+                nn.AdaptiveAvgPool2d((1, 1)),
+            )
+            self.feat_dim = 128
+
+        elif self.backbone_type == "vit":
+            try:
+                import timm
+            except ImportError:
+                raise ImportError("Installa timm:  pip install timm")
+            model_name = cfg.get("vit_model_name", "vit_tiny_patch16_224.augreg_in21k_ft_in1k")
+            self.backbone = timm.create_model(
+                model_name,
+                pretrained=cfg.get("vit_pretrained", True),
+                num_classes=0,
+            )
+            self.feat_dim = self.backbone.num_features   # 192 per vit_tiny
+            if cfg.get("vit_freeze", True):
+                for p in self.backbone.parameters():
+                    p.requires_grad = False
+
+        else:
+            raise ValueError(
+                f"gaf_backbone_type deve essere 'cnn' o 'vit', ricevuto: '{self.backbone_type}'"
+            )
+
+        # Projection comune ai due backbone: feat_dim → token_dim
         self.proj = nn.Sequential(
-            nn.Linear(token_dim, token_dim),
-            nn.LayerNorm(token_dim),
+            nn.Linear(self.feat_dim, self.token_dim),
+            nn.LayerNorm(self.token_dim),
             nn.ELU(),
-            nn.Dropout(dropout),
-            nn.Linear(token_dim, token_dim),
+            nn.Dropout(self.dropout_val),
+            nn.Linear(self.token_dim, self.token_dim),
         )
         glorot_zero(self)
 
-    def forward(self, gaf):
+    def _prepare_input(self, gaf: torch.Tensor):
+        """Porta gaf a [N, 1, H, W]. Restituisce (x, B, N)."""
         if gaf.dim() == 4:
             B, C, H, W = gaf.shape
-            x = gaf.view(B * C, 1, H, W)
+            return gaf.view(B * C, 1, H, W), B, B * C
         elif gaf.dim() == 5:
             B, C, N_CH, H, W = gaf.shape
-            x = gaf.view(B * C * N_CH, 1, H, W)
+            return gaf.view(B * C * N_CH, 1, H, W), B, B * C * N_CH
         else:
             raise ValueError(f"GAF shape inatteso: {gaf.shape}")
-        x = self.cnn(x).flatten(1)
-        x = self.proj(x)
-        x = x.view(B, -1, self.token_dim)
-        return x.mean(dim=1, keepdim=True)   # [B, 1, token_dim]
+
+    def forward(self, gaf: torch.Tensor) -> torch.Tensor:
+        x, B, N = self._prepare_input(gaf)   # x: [N, 1, H, W]
+
+        if self.backbone_type == "vit":
+            # Resize a gaf_image_size se necessario
+            if x.shape[-1] != self.gaf_image_size or x.shape[-2] != self.gaf_image_size:
+                x = F.interpolate(
+                    x,
+                    size=(self.gaf_image_size, self.gaf_image_size),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+            # ViT pre-trainato su ImageNet si aspetta 3 canali
+            x = x.repeat(1, 3, 1, 1)              # [N, 1, H, W] → [N, 3, H, W]
+
+        feats = self.backbone(x).flatten(1)        # [N, feat_dim]
+        feats = self.proj(feats)                   # [N, token_dim]
+        feats = feats.view(B, N // B, self.token_dim)
+        return feats.mean(dim=1, keepdim=True)     # [B, 1, token_dim]
 
 
-# ── GAF Projection Head ───────────────────────────────────────
+# ════════════════════════════════════════════════════════════
+# GAF Projection Head  (solo KD-Align, scartato a inferenza)
+# ════════════════════════════════════════════════════════════
 
 class GafProjectionHead(nn.Module):
-    """
-    Projection head temporaneo: mappa embedding EEG → spazio GAF.
-    Usato solo durante il KD-Align training, poi scartato.
-    """
+    """Mappa embedding EEG → spazio GAF per il contrastive KD-Align."""
 
     def __init__(self, d_in: int, d_out: int = 64, dropout: float = 0.3):
         super().__init__()
@@ -425,19 +494,21 @@ class GafProjectionHead(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 3:
-            x = x.mean(-1)   # [B, d_in]
+            x = x.mean(-1)
         return self.proj(x)
 
 
 def build_gaf_proj_head(cfg: dict) -> GafProjectionHead:
     n_groups = _get_n_groups(cfg, "student")
-    d_tcf = cfg["student_d_group"] * (n_groups + 1)
-    d_out = cfg["teacher_gaf_token_dim"]
-    dropout = cfg["student_dropout_conv"]
+    d_tcf    = cfg["student_d_group"] * (n_groups + 1)
+    d_out    = cfg["teacher_gaf_token_dim"]
+    dropout  = cfg["student_dropout_conv"]
     return GafProjectionHead(d_in=d_tcf, d_out=d_out, dropout=dropout)
 
 
-# ── Cross-modal attention block ──────────────────────────────
+# ════════════════════════════════════════════════════════════
+# Cross-Modal Attention Block
+# ════════════════════════════════════════════════════════════
 
 class CrossModalAttentionBlock(nn.Module):
     """Cross-attention pre-norm: EEG tokens = query, GAF tokens = key/value."""
@@ -445,14 +516,14 @@ class CrossModalAttentionBlock(nn.Module):
     def __init__(self, d_model: int, n_heads: int = 4, dropout: float = 0.3,
                  ff_mult: int = 2, drop_path: float = 0.0):
         super().__init__()
-        self.norm_q = nn.LayerNorm(d_model)
-        self.norm_kv = nn.LayerNorm(d_model)
+        self.norm_q    = nn.LayerNorm(d_model)
+        self.norm_kv   = nn.LayerNorm(d_model)
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=d_model, num_heads=n_heads, dropout=dropout, batch_first=True,
         )
-        self.dp = DropPath(drop_path)
+        self.dp      = DropPath(drop_path)
         self.norm_ff = nn.LayerNorm(d_model)
-        self.ff = nn.Sequential(
+        self.ff      = nn.Sequential(
             nn.Linear(d_model, ff_mult * d_model),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -462,7 +533,7 @@ class CrossModalAttentionBlock(nn.Module):
         glorot_zero(self)
 
     def forward(self, x_eeg, x_gaf):
-        q = self.norm_q(x_eeg)
+        q  = self.norm_q(x_eeg)
         kv = self.norm_kv(x_gaf)
         attn_out, _ = self.cross_attn(q, kv, kv, need_weights=False)
         x = x_eeg + self.dp(attn_out)
@@ -470,17 +541,19 @@ class CrossModalAttentionBlock(nn.Module):
         return x
 
 
-# ── Teacher cross-modal ──────────────────────────────────────
+# ════════════════════════════════════════════════════════════
+# Teacher Cross-Modal
+# ════════════════════════════════════════════════════════════
 
 class TeacherCrossModal(nn.Module):
     """
-    Teacher: backbone EEG + GAF encoder + cross-attention.
-    use_gaf=False → equivalente EEG-only.
+    Teacher: TCFormer EEG + GAFTokenEncoder + CrossAttention → classificatore.
+    Se use_gaf=False o gaf non valida, ricade su EEG-only.
     """
 
     def __init__(self, cfg: dict):
         super().__init__()
-        self.use_gaf = cfg.get("use_gaf", True)
+        self.use_gaf   = cfg.get("use_gaf", True)
         self.n_classes = cfg["n_classes"]
 
         self.eeg_backbone = TCFormerModule(
@@ -515,15 +588,11 @@ class TeacherCrossModal(nn.Module):
                 nn.SiLU(),
             )
 
-            self.gaf_encoder = GAFTokenEncoder(
-                n_channels=cfg["n_channels"],
-                token_dim=cfg["teacher_gaf_token_dim"],
-                base_channels=cfg["teacher_gaf_base_channels"],
-                dropout=cfg["teacher_gaf_dropout"],
-            )
+            self.gaf_encoder = GAFTokenEncoder(cfg)
 
-            dpr = torch.linspace(0, cfg["teacher_drop_path_max"],
-                                 cfg["teacher_cross_attn_depth"]).tolist()
+            dpr = torch.linspace(
+                0, cfg["teacher_drop_path_max"], cfg["teacher_cross_attn_depth"]
+            ).tolist()
             self.cross_blocks = nn.ModuleList([
                 CrossModalAttentionBlock(
                     d_model=cfg["teacher_gaf_token_dim"],
@@ -549,32 +618,26 @@ class TeacherCrossModal(nn.Module):
         return self.eeg_backbone(eeg)
 
     def get_eeg_tokens(self, eeg):
-        feat = self.eeg_backbone.get_features(eeg)   # [B, C, T]
-        tok = self.eeg_proj(feat).transpose(1, 2)    # [B, T, D]
+        feat = self.eeg_backbone.get_features(eeg)    # [B, C, T]
+        tok  = self.eeg_proj(feat).transpose(1, 2)    # [B, T, D]
         return tok
 
     def get_gaf_tokens(self, gaf):
-        return self.gaf_encoder(gaf)   # [B, 1, D]
+        return self.gaf_encoder(gaf)                  # [B, 1, D]
 
     def get_teacher_features(self, eeg, gaf=None):
-        if not self.use_gaf or gaf is None:
-            return self.eeg_backbone.get_features(eeg)
-        gaf_is_real = gaf.shape[-1] > 1 and gaf.shape[-2] > 1
-        if not gaf_is_real:
+        if not self.use_gaf or gaf is None or gaf.shape[-1] <= 1:
             return self.eeg_backbone.get_features(eeg)
         x_eeg = self.get_eeg_tokens(eeg)
         x_gaf = self.get_gaf_tokens(gaf)
         for blk in self.cross_blocks:
             x_eeg = blk(x_eeg, x_gaf)
-        return x_eeg.mean(dim=1)   # [B, D]
+        return x_eeg.mean(dim=1)                      # [B, D]
 
     def forward(self, eeg, gaf=None):
-        if not self.use_gaf or gaf is None:
+        if not self.use_gaf or gaf is None or gaf.shape[-1] <= 1:
             return self._forward_eeg_only(eeg), None
-        gaf_is_real = gaf.shape[-1] > 1 and gaf.shape[-2] > 1
-        if not gaf_is_real:
-            return self._forward_eeg_only(eeg), None
-        pooled = self.get_teacher_features(eeg, gaf)   # [B, D]
+        pooled = self.get_teacher_features(eeg, gaf)  # [B, D]
         return self.cls_head(pooled), None
 
 

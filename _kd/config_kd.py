@@ -31,6 +31,13 @@ KD_CFG = {
     "gaf_method": "summation",
     "downsample_to": 128,
 
+    # Backbone GAF: "cnn" oppure "vit"
+    "gaf_backbone_type": "vit",
+    "gaf_image_size": 224,
+    "vit_model_name": "vit_tiny_patch16_224.augreg_in21k_ft_in1k",
+    "vit_pretrained": True,
+    "vit_freeze": True,
+
     # ============================================================
     # Run control
     # ============================================================
@@ -51,7 +58,7 @@ KD_CFG = {
     "seeds": [42, 123, 456, 789, 1234],
     "use_gaf": True,
     "use_tgasf": True,
-    "kd_threshold": 0.5,
+    "kd_threshold": 0.65, #0.5
 
     # ============================================================
     # TEACHER training
@@ -89,14 +96,14 @@ KD_CFG = {
     "teacher_kernel_length_tcn": 4,
     "teacher_dropout_tcn": 0.3,
 
-    "teacher_gaf_token_dim": 64,
+    "teacher_gaf_token_dim": 32,  #64
     "teacher_gaf_base_channels": 16,
     "teacher_gaf_dropout": 0.4,
-    "teacher_cross_attn_depth": 2,
+    "teacher_cross_attn_depth": 1, #2
     "teacher_cross_attn_heads": 4,
     "teacher_cross_attn_dropout": 0.3,
-    "teacher_ff_mult": 2,
-    "teacher_cls_hidden": 64,
+    "teacher_ff_mult": 1,  #2
+    "teacher_cls_hidden": 32,  #64
 
     # ============================================================
     # STUDENT training
@@ -131,15 +138,15 @@ KD_CFG = {
     # ============================================================
     # KD loss
     # ============================================================
-    "kd_alpha": 0.5,
-    "kd_temperature": 2.0,
+    "kd_alpha": 0.35,  #0.5
+    "kd_temperature": 3.0, #2
 
     # ============================================================
     # KD-Align
     # ============================================================
     "use_kd_align": True,
-    "align_beta": 0.2,
-    "align_temperature": 0.07,
+    "align_beta": 0.1,  #0.2
+    "align_temperature": 0.10, #.07
 
     # ============================================================
     # Checkpoint paths

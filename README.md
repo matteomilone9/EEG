@@ -1,4 +1,4 @@
-# Esperimento - Riepilogo Finale
+## EEG - ONLY
 
 ## Parametri Utilizzati
 

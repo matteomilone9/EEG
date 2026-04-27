@@ -11,7 +11,7 @@
 | **Data Split** | No Split *(Validation = Test)* |
 | **Seeds** | 5 *(multi-seed averaging)* |
 | **Teacher Guidance** | Enabled |
-| **Experiment Date** | 24/04 |
+| **Experiment Date** | 27/04 |
 
 ---
 

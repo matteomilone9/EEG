@@ -6,7 +6,7 @@
 {
     "use_gaf": False,        # prima era True
     "use_kd_align": False,   # prima era True
-    "train_student": False   # prima era True → student non addestrato
+    "train_student": False   # prima era True 
 }
 
 | Subject | Accuracy (EEG)   | Student | 
@@ -20,3 +20,9 @@
 | S07     | 94.79%           | skipped | 
 | S08     | 85.42%           | skipped |
 | S09     | 89.24%           | skipped |
+
+
+| Modello | Accuracy |
+| ------- | -------- |
+| Teacher | 80.52%   |
+| Student | Skipped  |

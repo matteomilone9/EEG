@@ -26,6 +26,9 @@
 | Teacher | 80.52%   |
 | Student | Skipped  |
 
+```
+
+
 # EEG + KD Align (Teacher & Student) 
 ## Parametri Utilizzati
 
@@ -53,3 +56,4 @@
 | ------- | -------- |
 | Teacher | 77.47%   |
 | Student | 81.37%   |
+```

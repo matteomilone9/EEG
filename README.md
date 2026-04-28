@@ -59,3 +59,31 @@
 | Teacher | 77.47%   |
 | Student | 81.37%   |
 ```
+
+
+EEG (Teacher & Student) 
+
+```python
+{
+    "split_train": False (Session T+E)
+    "use_gaf": False,       
+    "use_kd_align": False,  
+    "train_student": True   
+}
+
+================================================================================
+Sub          Teacher              Student   vs EEG-Only
+--------------------------------------------------------------------------------
+S01 | Teacher 87.85% | Student 88.89% | ▲ 1.11pp
+S02 | Teacher 57.64% | Student 60.42% | ▲ 1.81pp
+S03 | Teacher 96.18% | Student 96.88% | ▲ 0.34pp
+S04 | Teacher 81.25% | Student 82.29% | ▲ 2.78pp
+S05 | Teacher 70.49% | Student 74.31% | ▲ 6.46pp
+S06 | Teacher 60.07% | Student 59.72% | ▼ 1.81pp
+S07 | Teacher 94.44% | Student 91.67% | ▼ 1.66pp
+S08 | Teacher 85.07% | Student 87.15% | ▲ 1.94pp
+S09 | Teacher 88.19% | Student 86.81% | ▼ 0.69pp
+--------------------------------------------------------------------------------
+Media Teacher         : 80.13%
+Media Student KD/Align: 80.90%
+```

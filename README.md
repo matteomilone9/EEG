@@ -3,7 +3,7 @@
 
 ```python
 {
-    "split_train": False (Sessione T+E)
+    "split_train": False (Session T+E)
     "use_gaf": False,        
     "use_kd_align": False,   
     "train_student": False    
@@ -35,7 +35,7 @@
 
 ```python
 {
-    "split_train": False (Sessione T+E)
+    "split_train": False (Session T+E)
     "use_gaf": True,       
     "use_kd_align": True,  
     "train_student": True   

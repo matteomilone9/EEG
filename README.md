@@ -1,12 +1,12 @@
-## EEG - ONLY
-
+# EEG - ONLY
 ## Parametri Utilizzati
 
 ```python
 {
-    "use_gaf": False,        # prima era True
-    "use_kd_align": False,   # prima era True
-    "train_student": False   # prima era True 
+    "split_train": True (80-20)
+    "use_gaf": False,        
+    "use_kd_align": False,   
+    "train_student": False    
 }
 
 | Subject | Accuracy (EEG)   | Student | 
@@ -26,3 +26,64 @@
 | ------- | -------- |
 | Teacher | 80.52%   |
 | Student | Skipped  |
+
+```
+
+
+# EEG + KD Align (Teacher & Student) 
+## Parametri Utilizzati
+
+```python
+{
+    "split_train": True (80-20)
+    "use_gaf": True,       
+    "use_kd_align": True,  
+    "train_student": True   
+}
+
+| Subject | Teacher   | Student | 
+| ------- | ----------| ------- | 
+| S01     | 86.11%    | 88.19%  | 
+| S02     | 55.56%    | 62.15%  | 
+| S03     | 96.18%    | 96.53%  | 
+| S04     | 75.69%    | 80.90%  |
+| S05     | 66.32%    | 71.18%  |
+| S06     | 56.25%    | 65.28%  | 
+| S07     | 92.01%    | 95.83%  | 
+| S08     | 84.04%    | 85.42%  |
+| S09     | 85.07%    | 86.81%  |
+
+
+| Modello | Accuracy |
+| ------- | -------- |
+| Teacher | 77.47%   |
+| Student | 81.37%   |
+```
+
+
+EEG (Teacher & Student) 
+
+```python
+{
+    "split_train": True (80-20)
+    "use_gaf": False,       
+    "use_kd_align": False,  
+    "train_student": True   
+}
+
+================================================================================
+Sub          Teacher              Student   vs EEG-Only
+--------------------------------------------------------------------------------
+S01 | Teacher 87.85% | Student 88.89% | ▲ 1.11pp
+S02 | Teacher 57.64% | Student 60.42% | ▲ 1.81pp
+S03 | Teacher 96.18% | Student 96.88% | ▲ 0.34pp
+S04 | Teacher 81.25% | Student 82.29% | ▲ 2.78pp
+S05 | Teacher 70.49% | Student 74.31% | ▲ 6.46pp
+S06 | Teacher 60.07% | Student 59.72% | ▼ 1.81pp
+S07 | Teacher 94.44% | Student 91.67% | ▼ 1.66pp
+S08 | Teacher 85.07% | Student 87.15% | ▲ 1.94pp
+S09 | Teacher 88.19% | Student 86.81% | ▼ 0.69pp
+--------------------------------------------------------------------------------
+Media Teacher         : 80.13%
+Media Student KD/Align: 80.90%
+```

@@ -3,7 +3,7 @@
 
 ```python
 {
-    "split_train": False (Session T+E)
+    "split_train": True (80-20)
     "use_gaf": False,        
     "use_kd_align": False,   
     "train_student": False    
@@ -35,7 +35,7 @@
 
 ```python
 {
-    "split_train": False (Session T+E)
+    "split_train": True (80-20)
     "use_gaf": True,       
     "use_kd_align": True,  
     "train_student": True   
@@ -65,7 +65,7 @@ EEG (Teacher & Student)
 
 ```python
 {
-    "split_train": False (Session T+E)
+    "split_train": True (80-20)
     "use_gaf": False,       
     "use_kd_align": False,  
     "train_student": True   

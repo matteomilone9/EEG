@@ -76,10 +76,10 @@ KD_CFG = {
     # ============================================================
     # TEACHER training
     # ============================================================
-    "epochs_teacher":           1000,
+    "epochs_teacher":           125,
     "lr_teacher":               9e-4,
-    "patience_teacher":         500,
-    "warmup_epochs_teacher":    50,
+    "patience_teacher":         125,
+    "warmup_epochs_teacher":    3, #50 within
     "weight_decay":             1e-4,
     "teacher_label_smoothing":  0.15,
 
@@ -115,10 +115,10 @@ KD_CFG = {
     # ============================================================
     # STUDENT training
     # ============================================================
-    "epochs_student":           1000,
+    "epochs_student":           125,
     "lr_student":               9e-4,
-    "patience_student":         500,
-    "warmup_epochs_student":    50,
+    "patience_student":         125,
+    "warmup_epochs_student":    3, #50 within
     "student_label_smoothing":  0.15,
     "freeze_teacher":           True,
 

@@ -1,4 +1,4 @@
-# preprocessing_kd.py — Copia di preprocessing.py per la pipeline _kd
+# preprocessing_kd.py
 # ============================================================
 
 import numpy as np
@@ -15,13 +15,13 @@ N_GAF_CHANNELS = KD_CFG["n_channels"]  # 22
 def zscore(X: np.ndarray) -> np.ndarray:
     m = X.mean(axis=-1, keepdims=True)
     s = X.std(axis=-1, keepdims=True) + 1e-8
-    return (X - m / s).astype(np.float32)
+    return ((X - m) / s).astype(np.float32)
 
 
 def zscore_per_trial(X: np.ndarray) -> np.ndarray:
-    """Z-score applicato trial per trial, non sull'intero dataset."""
-    mu = X.mean(axis=-1, keepdims=True)   # (B, C, 1)
-    std = X.std(axis=-1, keepdims=True) + 1e-8
+    """Z-score applicato trial per trial (B, C, T) → normalizza su dim T."""
+    mu  = X.mean(axis=-1, keepdims=True)   # (B, C, 1)
+    std = X.std(axis=-1,  keepdims=True) + 1e-8
     return ((X - mu) / std).astype(np.float32)
 
 
@@ -60,11 +60,34 @@ def load_subject(sub_id: int, cfg: dict):
     )
     sp = wins.split("session")
     tk = [k for k in sp if "train" in k.lower() or k == "T"][0]
-    ek = [k for k in sp if "test" in k.lower() or k == "E"][0]
+    ek = [k for k in sp if "test"  in k.lower() or k == "E"][0]
     return windows_to_numpy(sp[tk]) + windows_to_numpy(sp[ek])
 
 
-def load_subject_both(sub_id: int, cfg: dict) -> dict:
+def load_subject_both(sub_id: int, cfg: dict, raw: bool = False) -> dict:
+    """
+    Carica la T-session e la E-session di un soggetto.
+
+    Parametri
+    ---------
+    sub_id : int
+        ID soggetto (1–9 per BNCI2014001).
+    cfg : dict
+        Configurazione con lowcut, highcut, sfreq.
+    raw : bool, default False
+        Se True  → restituisce i segnali RAW (µV, dopo filtro e resample)
+                   SENZA applicare zscore_per_trial.
+                   Usato dalla pipeline LOSO con use_global_norm=True,
+                   che applica la normalizzazione globale sul pool di training.
+        Se False → applica zscore_per_trial (comportamento originale,
+                   compatibile con pipeline sub-dep).
+
+    Returns
+    -------
+    dict con chiavi:
+        "T": (Xt, yt)   T-session
+        "E": (Xe, ye)   E-session
+    """
     ds = MOABBDataset(dataset_name="BNCI2014001", subject_ids=[sub_id])
     preprocess(ds, [
         Preprocessor("pick", picks="eeg"),
@@ -80,18 +103,26 @@ def load_subject_both(sub_id: int, cfg: dict) -> dict:
     )
     sp = wins.split("session")
     tk = [k for k in sp if "train" in k.lower() or k == "T"][0]
-    ek = [k for k in sp if "test" in k.lower() or k == "E"][0]
+    ek = [k for k in sp if "test"  in k.lower() or k == "E"][0]
+
     Xt, yt = windows_to_numpy(sp[tk])
     Xe, ye = windows_to_numpy(sp[ek])
-    return {"T": (zscore_per_trial(Xt), yt), "E": (zscore_per_trial(Xe), ye)}
+
+    if raw:
+        # Nessuna normalizzazione: i dati verranno normalizzati globalmente
+        # sul training pool in build_loso_loaders_kd (_apply_global_norm).
+        return {"T": (Xt, yt), "E": (Xe, ye)}
+    else:
+        # Comportamento originale: z-score per trial per soggetto
+        return {"T": (zscore_per_trial(Xt), yt), "E": (zscore_per_trial(Xe), ye)}
 
 
 def make_gaf(X_raw: np.ndarray, cfg: dict) -> np.ndarray:
-    gaf = GramianAngularField(image_size=cfg["image_size"], method=cfg["gaf_method"])
+    gaf  = GramianAngularField(image_size=cfg["image_size"], method=cfg["gaf_method"])
     X_ds = downsample(X_raw, cfg["downsample_to"])
     X_ds = minmax(X_ds)
     B, C, _ = X_ds.shape
-    out = np.zeros((B, C, cfg["image_size"], cfg["image_size"]), dtype=np.float32)
+    out  = np.zeros((B, C, cfg["image_size"], cfg["image_size"]), dtype=np.float32)
     for i in tqdm(range(B), desc="GAF", leave=False):
         out[i] = gaf.fit_transform(X_ds[i])
     return out
@@ -110,6 +141,7 @@ def preprocess_subject(X_tr_raw: np.ndarray, X_te_raw: np.ndarray, cfg: dict):
 
 
 def build_loso_cache(cfg: dict) -> dict:
+    """Wrapper mantenuto per compatibilità — usa build_loso_cache in pipelines_loso_kd."""
     cache = {}
     for s in range(1, cfg["n_subjects"] + 1):
         print(f"LOSO cache: Caricamento soggetto {s}/{cfg['n_subjects']}...")

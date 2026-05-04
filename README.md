@@ -1,11 +1,3 @@
-Ecco tutto riscritto in modo ordinato e coerente:
-
----
-
-# Risultati Sperimentali — BCI Motor Imagery
-
----
-
 ## 1. EEG Only (Split 80-20)
 
 **Configurazione:**

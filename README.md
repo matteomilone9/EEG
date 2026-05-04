@@ -87,3 +87,42 @@ S09 | Teacher 88.19% | Student 86.81% | ▼ 0.69pp
 Media Teacher         : 80.13%
 Media Student KD/Align: 80.90%
 ```
+
+EEG-ONLY
+BCI-2a_fff_loso_kd_multival_seed42 student_acc / student_kappa non disponibili
+Subject	teacher_acc	teacher_kappa	student_acc	student_kappa
+1	64.8003	0.5307	—	—
+2	30.4688	0.0729	—	—
+3	72.3958	0.6319	—	—
+4	36.9792	0.1597	—	—
+5	30.2517	0.0700	—	—
+6	29.2969	0.0573	—	—
+7	35.8507	0.1447	—	—
+8	58.0729	0.4410	—	—
+9	55.4253	0.4057	—	—
+
+EEG TEACHER-STUDENT
+BCI-2a_loso_kd_multival_seed42
+Subject	teacher_acc	teacher_kappa	student_acc	student_kappa
+1	66.6667	0.5556	66.7101	0.5561
+2	30.9462	0.0793	31.9010	0.0920
+3	69.4010	0.5920	72.7865	0.6372
+4	38.3247	0.1777	36.5451	0.1539
+5	30.6424	0.0752	30.0781	0.0677
+6	29.5139	0.0602	28.3420	0.0446
+7	37.8038	0.1707	38.5417	0.1806
+8	56.9878	0.4265	59.8090	0.4641
+9	54.5573	0.3941	53.2552	0.3767
+
+EEG TEACHER STUDENT  (GAF+ KD_ALIGN)
+BCI-2a_ttt_loso_kd_multival_seed42
+Subject	teacher_acc	teacher_kappa	student_acc	student_kappa
+1	62.5868	0.5012	66.1024	0.5480
+2	27.7344	0.0365	27.8646	0.0382
+3	64.9306	0.5324	70.9201	0.6123
+4	32.4219	0.0990	35.3299	0.1377
+5	28.0816	0.0411	28.6458	0.0486
+6	27.3438	0.0313	25.1302	0.0017
+7	32.7257	0.1030	35.3299	0.1377
+8	57.2483	0.4300	59.1580	0.4554
+9	49.5660	0.3275	52.6476	0.3686

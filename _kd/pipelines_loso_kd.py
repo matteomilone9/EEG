@@ -130,14 +130,9 @@ def _append_row(csv_file: Path, fieldnames: list, row: dict):
 
 
 def _get_loso_cfg(cfg_override: dict | None = None) -> dict:
-    """
-    Restituisce una config LOSO:
-      - split_train=False  (val costruito con dati del val_sub)
-      - use_global_norm=True  (normalizzazione sul pool globale di training)
-    """
     cfg = get_kd_subject_cfg(1)
     cfg["split_train"]      = False
-    cfg["use_global_norm"]  = True   # default LOSO: norm sul training pool
+    cfg["use_global_norm"]  = False   # MODIFICA: da True a False
     if cfg_override:
         cfg.update(cfg_override)
     return cfg

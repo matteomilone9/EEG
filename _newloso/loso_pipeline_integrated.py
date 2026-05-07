@@ -15,8 +15,6 @@ Modifiche integrate rispetto alla versione precedente:
   - warmup 3 epoche + cosine decay
   - final checkpoint, no early stopping
 """
-import warnings
-warnings.filterwarnings("ignore")
 
 from __future__ import annotations
 
@@ -35,6 +33,9 @@ from sklearn.metrics import accuracy_score, cohen_kappa_score
 from sklearn.preprocessing import StandardScaler
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Dataset
+
+import warnings
+warnings.filterwarnings("ignore")
 
 from model import build_tcformer
 
@@ -183,7 +184,7 @@ def load_subject(subject_id: int, cfg: dict) -> dict:
             X_list.append(data)
             y_list.append(labels)
         return np.concatenate(X_list, axis=0), np.concatenate(y_list, axis=0)
-
+    
     X,      y      = _extract(train_dataset)
     X_test, y_test = _extract(test_dataset)
 

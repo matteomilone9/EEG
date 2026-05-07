@@ -531,7 +531,7 @@ def get_default_cfg() -> dict:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="TCFormer LOSO Pipeline (repo-aligned)", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--seeds", type=int, nargs="+", default=[42, 0, 1, 2, 3])
+    parser.add_argument("--seeds", type=int, nargs="+", default=[42, 64, 128, 256, 512])
     parser.add_argument("--subjects", type=int, nargs="+", default=None)
     parser.add_argument("--fold", type=int, default=None)
     parser.add_argument("--out_dir", default="./loso_results")
